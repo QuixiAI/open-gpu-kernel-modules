@@ -22,13 +22,26 @@ $ nvidia-smi topo -p2p r
  ...                                    (previously: GNS everywhere)
 ```
 
-Measured on an 8x RTX 3090 EPYC host: direct peer copies at **23–26 GB/s**
-across the root complex (PCIe 4.0 x16 line rate) versus ~2 GB/s per GPU
-through host staging before, and NCCL all-reduce bus bandwidth of
-**24.7 GB/s** versus 2.7 GB/s on NCCL's no-P2P SHM transport. Getting
-there takes three ingredients — the patched modules, a full-size BAR1,
-and one NCCL setting — all covered below; a P2P matrix showing OK is the
-start, not the finish line.
+## What it's worth: real LLM serving numbers
+
+Qwen3.8-Flash-Next-FP8 (125B-A6B MoE) served with tensor parallelism
+across **8x RTX 3090** (EPYC Rome, PCIe 4.0 x16), exact 1,000-token
+prompts / 2,000-token completions, identical model, config, and sampling
+— the only change is this driver plus the setup steps below:
+
+| Concurrency | Stock driver (no P2P) | This fork (P2P) | Speedup |
+| ---: | ---: | ---: | ---: |
+| 1 | 109.6 tok/s | **148.8 tok/s** | **+36%** |
+| 8 | 409.7 tok/s | **647.9 tok/s** | **+58%** |
+
+Under the hood: direct peer copies run at **23–26 GB/s** across the root
+complex (PCIe 4.0 x16 line rate) versus ~2 GB/s per GPU through host
+staging, and NCCL all-reduce bus bandwidth reaches **24.7 GB/s** versus
+2.7 GB/s on NCCL's no-P2P SHM transport — a 9x collective-fabric jump
+that the serving numbers above cash in. Getting there takes three
+ingredients — the patched modules, a full-size BAR1, and one NCCL
+setting — all covered below; a P2P matrix showing OK is the start, not
+the finish line.
 
 ## How it works
 

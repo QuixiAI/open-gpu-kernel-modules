@@ -1,0 +1,13 @@
+[Unit]
+Description=Resize NVIDIA BAR1 to maximum (firmware allocates 256 MiB each boot)
+# Run late enough that the driver and persistenced exist, before real GPU users.
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/resize-bar1.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

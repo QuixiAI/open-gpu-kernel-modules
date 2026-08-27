@@ -64,14 +64,50 @@ surgical set of force-enables (one commit, four source files):
   `FORCE_P2P_TYPE_BAR1P2P` regkey, and exactly what
   `kbusIsPcieBar1P2PMappingSupported_GH100` checks).
 - `src/nvidia/generated/g_kern_bus_nvoc.c` — route pre-Hopper chips to the
-  chip-independent GH100 BAR1-P2P HAL implementations. This covers GA102
-  and AD102; GB202 already uses the GH100 entries natively.
+  chip-independent GH100 BAR1-P2P HAL implementations. Because these are
+  the *default* HAL entries, this covers every pre-Hopper die (all of
+  Turing, Ampere, and Ada — see
+  [Which GPUs are covered](#which-gpus-are-covered)); GB202 already uses
+  the GH100 entries natively.
 - `src/nvidia/src/kernel/gpu/bus/arch/pascal/kern_bus_gp100.c` — dispatch
   the `_PCIE_BAR1` connection type to the BAR1-P2P create/remove HALs,
   mirroring the GH100 dispatch.
 
 No userspace changes: the modules pair with the stock 610.57.04 userspace
 driver and GSP firmware.
+
+## Which GPUs are covered
+
+The patch is not GPU-model-specific: it reroutes the *default* (pre-Hopper)
+HAL entries and the shared pre-Hopper P2P dispatch, so it covers **every
+chip the open kernel modules support that doesn't already have native BAR1
+P2P** — that is, all of Turing, Ampere, and Ada, not just the flagship
+dies. We audited the full chain: the capability check
+(`kbusIsPcieBar1P2PMappingSupported_GH100`), the mapping create/remove
+functions (pure refcounting plus IOMMU mappings, no Hopper register
+access), the P2P-caps plumbing (`_kp2pCapsGetStatusOverPcieBar1`), and the
+UVM side (`UVM_GPU_LINK_PCIE_BAR1`) are all chip-independent; the static
+BAR1 machinery it depends on (`kbusIsStaticBar1Supported_TU102` and
+friends) is implemented for Turing and newer. Hopper and Blackwell use
+NVIDIA's own GH100 entries natively and are untouched.
+
+What actually gates a given card is **hardware, not code**: static BAR1
+(and therefore BAR1 P2P) requires BAR1 to cover the whole framebuffer.
+
+- **Ampere (RTX 30xx / GA10x) and Ada (RTX 40xx / AD10x)**: ReBAR-capable;
+  works as described below. Verified on 8x RTX 3090.
+- **Blackwell (RTX 50xx / GB20x)**: native GH100 path, force-enabled by
+  the regkey defaults; ReBAR-capable.
+- **Turing (RTX 20xx / GTX 16xx / TU10x–TU11x)**: the code path is fully
+  wired, but Turing vBIOSes predate Resizable BAR, so the config-space
+  ReBAR capability is absent and both the driver resize and
+  `tools/resize-bar1.sh` will report no ReBAR capability. Community UEFI
+  drivers that enable ReBAR on Turing at the strap level exist (e.g.
+  [NVStrapsReBar](https://github.com/terminatorul/NVStrapsReBar), built on
+  xCuri0/ReBarUEFI); with BAR1 covering the framebuffer, the same static
+  BAR1 + BAR1 P2P path should light up. Untested by us — reports welcome.
+- **Pascal / Volta and older**: out of scope — the open kernel modules
+  (GSP-based) don't support them at all.
 
 ## Requirements
 

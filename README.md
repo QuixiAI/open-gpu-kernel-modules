@@ -10,8 +10,9 @@ consumer GeForce GPUs** — RTX 3090 (GA102), RTX 4090 (AD102), and RTX 5090
 (later simplified by aikitoria), ported forward to the 610 driver series.
 
 It also fixes two things for unified-memory GPUs such as the DGX Spark
-(GB10): freed GPU memory that stays invisible to the OS after a process
-exits, and slow GPU page faults on system-allocated memory. See
+(GB10), both verified on a Spark: freed GPU memory that stays invisible to
+the OS after a process exits, and slow GPU page faults on system-allocated
+memory (45x faster first touch, huge pages now granted). See
 [Unified-memory GPUs](#unified-memory-gpus-dgx-spark--gb10-the-memory-pool-fix).
 
 NVIDIA's driver refuses P2P on GeForce boards. On a multi-GPU box that
@@ -325,6 +326,22 @@ disables pool creation entirely) still works and composes with this; with
 no pools the trim is a no-op. The shrinker stays registered, so
 `drop_caches` and memory pressure keep working too.
 
+**Measured** (DGX Spark, driver 610.43.02 built with the patch, desktop
+session and `nvidia-persistenced` running; `MemAvailable` before the test
+process, then 10 s after a process that allocated and touched 64 GiB on
+the GPU exited):
+
+| Configuration | Before | 10 s after exit | |
+|---|---|---|---|
+| stock 610.43.02 | 119.2 GiB | 55.0 GiB | 64 GiB unaccounted, no process in `nvidia-smi` |
+| patched, `RetainMB=0` (default) | 119.0 GiB | 119.1 GiB | all returned |
+| patched, `RetainMB=4096` | 119.2 GiB | 114.9 GiB | 4.3 GiB kept, as configured |
+| patched, `RetainMB=-1` | 119.0 GiB | 54.4 GiB | old behaviour, as intended |
+| patched, `EnableSystemMemoryPools=0` | 118.8 GiB | 119.2 GiB | composes, no oops |
+
+Twenty allocate-32-GiB / free / exit cycles against a second process
+holding 16 GiB and a host memory hog produced no kernel warnings.
+
 ### Also on this branch: GPU page faults on system-allocated memory
 
 When the GPU is the first to touch pageable memory on a Spark (an mmap'd
@@ -336,8 +353,29 @@ transparent huge page, and afterwards 16 M random accesses/s against
 3500 M/s for the same kernel on `cudaMalloc` memory. The fix in
 `kernel-open/nvidia-uvm/uvm_ats_faults.c` populates the range in place
 through `handle_mm_fault()` on integrated GPUs, which honours THP. It is
-gated on the GPU being integrated and is inert on discrete boards. The
-full measurements, and the A/B kit for both changes, are in
+gated on the GPU being integrated and is inert on discrete boards.
+
+**Measured** (same box, stock vs patched `nvidia-uvm`, 4 GiB anonymous
+`mmap` buffer first touched by the GPU, then read by identical CUDA
+kernels; the `cudaMalloc` reference is 256 GB/s stream and 3300 M random
+accesses/s):
+
+| | stock | patched |
+|---|---|---|
+| GPU first touch, 4 KiB pages | 0.42 GiB/s | 1.19 GiB/s |
+| GPU first touch, `MADV_HUGEPAGE` | 0.44 GiB/s, 0 MiB THP | 19.6 GiB/s, 4096 MiB THP |
+| random 4 KiB-page access afterwards | 17 M acc/s | 207 M acc/s |
+| streaming read | 169 GB/s | 168 GB/s |
+
+Streaming through ATS is unchanged (it never was a fault problem); what
+changes is that the GPU now gets huge pages exactly as a CPU first touch
+does, and pays 45x less to fault memory in. The remaining gap to the
+`cudaMalloc` pool is translation through the CPU page tables, so for
+weights and KV that are read at random, copying into `cudaMalloc` memory
+is still the right call; `mmap` is now merely slow rather than
+unusable.
+
+The full measurements, and the A/B kit for both changes, are in
 `driver_improvement_findings.md`.
 
 ## NCCL on many-GPU PCIe boxes

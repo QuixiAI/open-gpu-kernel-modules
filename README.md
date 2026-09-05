@@ -9,6 +9,11 @@ consumer GeForce GPUs** — RTX 3090 (GA102), RTX 4090 (AD102), and RTX 5090
 [George Hotz / tinygrad's P2P patch](https://github.com/tinygrad/open-gpu-kernel-modules)
 (later simplified by aikitoria), ported forward to the 610 driver series.
 
+It also fixes two things for unified-memory GPUs such as the DGX Spark
+(GB10): freed GPU memory that stays invisible to the OS after a process
+exits, and slow GPU page faults on system-allocated memory. See
+[Unified-memory GPUs](#unified-memory-gpus-dgx-spark--gb10-the-memory-pool-fix).
+
 NVIDIA's driver refuses P2P on GeForce boards. On a multi-GPU box that
 means every byte exchanged between GPUs is staged through host RAM — and on
 a typical EPYC/Threadripper host, concurrent device-to-host writes collapse
@@ -243,6 +248,96 @@ Three things have to line up:
    sudo cp tools/nvidia-resize-bar1.service /etc/systemd/system/
    sudo systemctl daemon-reload && sudo systemctl enable nvidia-resize-bar1
    ```
+
+## Unified-memory GPUs (DGX Spark / GB10): the memory pool fix
+
+The fork also carries two changes that have nothing to do with P2P and
+everything to do with GPUs that have no framebuffer of their own. On a
+DGX Spark (GB10) every `cudaMalloc` is system memory: `cudaMemGetInfo`
+total equals `MemTotal`, and weights, KV cache and CUDA graphs all come out
+of the same 121.7 GiB LPDDR5X pool as the CPU, the desktop and the OS.
+
+### The problem: memory that nobody owns after a process exits
+
+Since driver 590 the open kernel module keeps freed system pages in
+per-node, per-page-order **pools** instead of returning them to Linux.
+The pools exist so the next allocation in the same process can skip the
+buddy allocator and reuse pre-zeroed pages (a 16 GiB `cudaMalloc` is
+0.10 s from a warm pool versus 0.35 s cold). The catch is that nothing
+empties them when the process that freed the pages goes away. The only
+release paths are the kernel's memory-pressure shrinker and a manual
+`echo 2 > /proc/sys/vm/drop_caches`.
+
+On a discrete GPU that is harmless: the pools only ever hold pinned host
+buffers. On a unified-memory GPU they hold the model. Measured on a Spark
+running the stock 610.43.02 driver, with the desktop up and
+`nvidia-persistenced` holding the device:
+
+```
+MemAvailable before:            107.0 GiB
+run: torch.empty(64 GiB, device="cuda").fill_(1); exit
+MemAvailable 10 s after exit:    51.7 GiB     nvidia-smi: no processes
+```
+
+Those 55 GiB are in none of the `/proc/meminfo` buckets. `free` shows
+them as used, `MemAvailable` is down by that amount, and any user-space
+check that trusts `MemAvailable` (vLLM's startup check does) fails on the
+next engine start: *"Free memory on device cuda:0 (66.47/121.69 GiB) on
+startup is less than desired GPU memory utilization"*. NVIDIA's own Spark
+troubleshooting page gives `drop_caches` as the workaround; the developer
+forum thread reporting it as a 590 regression was answered with
+"drivers past 580 are unsupported on Spark".
+
+### The fix: trim the pools when a client closes
+
+`kernel-open/nvidia/nv-vm.c` gains `nv_trim_page_pools(retain_pages)`,
+built on the same move-and-free primitive the shrinker uses (now shared as
+`nv_mem_pool_reclaim()`): dirty pages first, then clean, pool mutex dropped
+before the pages go back to the kernel, so it runs safely alongside the
+scrubber worker and the shrinker. It walks pools from the largest page
+order down and keeps entries only up to a watermark.
+
+The trigger is **any client file close**, not "the last client is gone":
+on any box with a desktop or `nvidia-persistenced`, the device never goes
+idle, so a hook on the usage count reaching zero would never fire. The trim
+runs from both `nvidia_close_callback` (the per-GPU file) and
+`nvidia_ctl_close` (the control file, which is what actually owns an RM
+client's allocations), after the RM has torn the client down and with no
+driver locks held.
+
+One new module parameter controls it:
+
+```
+NVreg_SystemMemoryPoolRetainMB   default 0
+```
+
+- `0` returns everything to the OS on every client close. `MemAvailable`
+  is truthful again; the cost is that the next process pays the cold
+  allocation path (about 22 ms per GiB instead of 6).
+- `N` keeps up to N MiB pooled, largest page orders first. Use this if
+  something on the box allocates and frees during serving (CUDA graph
+  capture churn) and `nvidia-smi` polling keeps draining its warm pool.
+- `0xFFFFFFFF` disables the trim and restores the old behaviour.
+
+`NVreg_EnableSystemMemoryPools=0` (the no-source-change workaround, which
+disables pool creation entirely) still works and composes with this; with
+no pools the trim is a no-op. The shrinker stays registered, so
+`drop_caches` and memory pressure keep working too.
+
+### Also on this branch: GPU page faults on system-allocated memory
+
+When the GPU is the first to touch pageable memory on a Spark (an mmap'd
+model file, `cudaMallocManaged`, HMM), `nvidia-uvm` serviced the faults
+through the kernel's `migrate_vma` path one 4 KiB page at a time, even
+though on an integrated GPU there is nothing to migrate to. That meant
+0.43 GiB/s first-touch (about 140 s for a 60 GB model), never a
+transparent huge page, and afterwards 16 M random accesses/s against
+3500 M/s for the same kernel on `cudaMalloc` memory. The fix in
+`kernel-open/nvidia-uvm/uvm_ats_faults.c` populates the range in place
+through `handle_mm_fault()` on integrated GPUs, which honours THP. It is
+gated on the GPU being integrated and is inert on discrete boards. The
+full measurements, and the A/B kit for both changes, are in
+`driver_improvement_findings.md`.
 
 ## NCCL on many-GPU PCIe boxes
 

@@ -27,6 +27,7 @@
 #include "uvm_ats.h"
 #include "uvm_ats_faults.h"
 #include "uvm_migrate_pageable.h"
+#include "uvm_populate_pageable.h"
 #include "uvm_va_space.h"
 #include <linux/nodemask.h>
 #include <linux/mempolicy.h>
@@ -108,6 +109,30 @@ static NV_STATUS service_ats_requests(uvm_gpu_va_space_t *gpu_va_space,
     }
 
     UVM_ASSERT(uvm_ats_can_service_faults(gpu_va_space, mm));
+
+    // Integrated (ZERO_FB) GPUs such as GB10 / DGX Spark have no device
+    // memory: the residency picked above is always a CPU NUMA node, so there
+    // is nothing to migrate. Routing the fault through uvm_migrate_pageable()
+    // anyway means migrate_vma_setup() plus one order-0 alloc_pages_node()
+    // per 4 KiB page, which can never form a transparent huge page and costs
+    // about 9 us per page (measured 0.43 GiB/s GPU first-touch on GB10, with
+    // 0 bytes of THP even under MADV_HUGEPAGE). Populate the range in place
+    // instead: handle_mm_fault() honours THP (a 2 MiB PMD per first touch)
+    // and the CPU-touch equivalent measured 28 GiB/s. Access-counter
+    // servicing keeps the migration path.
+    if (is_fault_service_type &&
+        gpu_va_space->gpu->parent->is_integrated_gpu &&
+        UVM_ID_IS_CPU(ats_context->residency_id)) {
+        status = uvm_populate_pageable_vma(vma,
+                                           start,
+                                           length,
+                                           uvm_migrate_args.populate_permissions,
+                                           uvm_migrate_args.populate_flags);
+        if (status == NV_WARN_NOTHING_TO_DO)
+            status = NV_OK;
+
+        return status;
+    }
 
     // We are trying to use migrate_vma API in the kernel (if it exists) to
     // populate and map the faulting region on the GPU. We want to do this only

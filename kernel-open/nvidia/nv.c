@@ -2118,6 +2118,27 @@ void nv_stop_device(nv_state_t *nv, nvidia_stack_t *sp)
 }
 
 /*
+ * Return pooled system pages to the OS after a client has torn down its
+ * allocations (see NVreg_SystemMemoryPoolRetainMB). Called with no driver
+ * locks held, from a sleepable context. RM clients, and with them their
+ * system memory allocations, belong to the control file; the per-device file
+ * close also runs the RM cleanup for that file. Both closes call this so the
+ * trim runs after whichever close actually pushed the pages into the pools.
+ */
+extern NvU32 NVreg_SystemMemoryPoolRetainMB;
+
+static void nv_trim_page_pools_on_client_close(void)
+{
+    NvU64 retain_pages;
+
+    if (NVreg_SystemMemoryPoolRetainMB == NV_SYSTEM_MEMORY_POOL_RETAIN_MB_DISABLE)
+        return;
+
+    retain_pages = ((NvU64)NVreg_SystemMemoryPoolRetainMB << 20) >> PAGE_SHIFT;
+    nv_trim_page_pools((unsigned long)retain_pages);
+}
+
+/*
  * Decreases nvl->usage_count, stopping the device when it reaches 0. Assumes
  * nvl->ldata_lock is held.
  */
@@ -2214,6 +2235,8 @@ nvidia_close_callback(
         {
             pci_stop_and_remove_bus_device(nvl->pci_dev);
         }
+
+        nv_trim_page_pools_on_client_close();
     }
 
     nv_kmem_cache_free_stack(sp);
@@ -3226,6 +3249,8 @@ nvidia_ctl_close(
     NV_SET_FILE_PRIVATE(file, NULL);
 
     nv_kmem_cache_free_stack(sp);
+
+    nv_trim_page_pools_on_client_close();
 
     return 0;
 }

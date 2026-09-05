@@ -56,6 +56,7 @@ NV_STATUS   nv_alloc_system_pages       (nv_state_t *, nv_alloc_t *);
 void        nv_free_system_pages        (nv_alloc_t *);
 int         nv_init_page_pools          (void);
 void        nv_destroy_page_pools       (void);
+void        nv_trim_page_pools          (unsigned long retain_pages);
 
 int         nv_uvm_init                 (void);
 void        nv_uvm_exit                 (void);

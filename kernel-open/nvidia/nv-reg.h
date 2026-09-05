@@ -982,6 +982,32 @@
 #define NV_ENABLE_SYSTEM_MEMORY_POOLS_SHIFT 12
 
 /*
+ * Option: NVreg_SystemMemoryPoolRetainMB
+ *
+ * Description:
+ *
+ * Amount of freed system memory, in MiB, that the system memory page pools
+ * (see NVreg_EnableSystemMemoryPools) may keep cached after a client closes
+ * its device or control file. Pooled pages are not visible in /proc/meminfo
+ * and are subtracted from MemAvailable until the kernel's shrinker runs, so
+ * on unified-memory systems (where every device allocation is system memory)
+ * a large pool left behind by an exited process looks like a leak to the OS
+ * and to memory checks in user space.
+ *
+ * 0 (default) returns all pooled pages to the OS on every client close.
+ * 0xFFFFFFFF disables trimming on client close: pools grow without bound
+ * until the kernel's memory-pressure shrinker reclaims them.
+ * Any other value keeps up to that many MiB pooled, largest page orders
+ * first.
+ *
+ * This option has no effect when NVreg_EnableSystemMemoryPools is 0.
+ */
+#define __NV_SYSTEM_MEMORY_POOL_RETAIN_MB SystemMemoryPoolRetainMB
+#define NV_SYSTEM_MEMORY_POOL_RETAIN_MB NV_REG_STRING(__NV_SYSTEM_MEMORY_POOL_RETAIN_MB)
+#define NV_SYSTEM_MEMORY_POOL_RETAIN_MB_DEFAULT 0
+#define NV_SYSTEM_MEMORY_POOL_RETAIN_MB_DISABLE 0xFFFFFFFF
+
+/*
  * Option: NVreg_OsEnableCxlSupport
  *
  * Description:
@@ -1071,6 +1097,7 @@ NV_DEFINE_REG_ENTRY(__NV_RM_NVLINK_BW_LINK_COUNT, 0);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_IMEX_CHANNEL_COUNT, 2048);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_CREATE_IMEX_CHANNEL_0, 0);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_ENABLE_SYSTEM_MEMORY_POOLS, NV_ENABLE_SYSTEM_MEMORY_POOLS_DEFAULT);
+NV_DEFINE_REG_ENTRY_GLOBAL(__NV_SYSTEM_MEMORY_POOL_RETAIN_MB, NV_SYSTEM_MEMORY_POOL_RETAIN_MB_DEFAULT);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_OS_ENABLE_CXL_SUPPORT, 1);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_USE_KERNEL_SUSPEND_NOTIFIERS, 0);
 NV_DEFINE_REG_ENTRY(__NV_ENABLE_NON_PREEMTABLE_DEBUGGER_SESSION, 0);
@@ -1123,6 +1150,7 @@ nv_parm_t nv_parms[] = {
     NV_DEFINE_PARAMS_TABLE_ENTRY(__NV_IMEX_CHANNEL_COUNT),
     NV_DEFINE_PARAMS_TABLE_ENTRY(__NV_CREATE_IMEX_CHANNEL_0),
     NV_DEFINE_PARAMS_TABLE_ENTRY(__NV_ENABLE_SYSTEM_MEMORY_POOLS),
+    NV_DEFINE_PARAMS_TABLE_ENTRY(__NV_SYSTEM_MEMORY_POOL_RETAIN_MB),
     NV_DEFINE_PARAMS_TABLE_ENTRY(__NV_OS_ENABLE_CXL_SUPPORT),
     NV_DEFINE_PARAMS_TABLE_ENTRY(__NV_ENABLE_NON_PREEMTABLE_DEBUGGER_SESSION),
     {NULL, NULL}

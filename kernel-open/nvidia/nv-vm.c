@@ -27,6 +27,7 @@
 #include "nv-reg.h"
 
 extern NvU32 NVreg_EnableSystemMemoryPools;
+extern NvU32 NVreg_SystemMemoryPoolRetainMB;
 
 static inline void nv_set_contig_memory_uc(nvidia_pte_t *page_ptr, NvU32 num_pages)
 {
@@ -536,6 +537,41 @@ done:
 #endif
 }
 
+/*
+ * Release up to max_entries pool entries (dirty first, then clean) back to the
+ * kernel. Entries are detached under the pool mutex and freed with it dropped,
+ * so this may run concurrently with the scrubber worker and the shrinker. An
+ * entry the scrubber is zeroing at that moment is on neither list and is left
+ * alone; it returns to clean_list on the worker's next pass. Returns the
+ * number of entries freed. Must be called from a sleepable context.
+ */
+static unsigned long
+nv_mem_pool_reclaim
+(
+    nv_page_pool_t *mem_pool,
+    unsigned long max_entries
+)
+{
+    unsigned long entries_remaining;
+    unsigned long entries_freed;
+    struct list_head reclaim_list;
+
+    INIT_LIST_HEAD(&reclaim_list);
+
+    if (os_acquire_mutex(mem_pool->lock) != NV_OK)
+        return 0;
+    entries_remaining = nv_mem_pool_move_pages(&reclaim_list, &mem_pool->dirty_list, max_entries);
+    entries_remaining = nv_mem_pool_move_pages(&reclaim_list, &mem_pool->clean_list, entries_remaining);
+    entries_freed = max_entries - entries_remaining;
+    WARN_ON(entries_freed > mem_pool->pages_owned);
+    mem_pool->pages_owned -= entries_freed;
+    os_release_mutex(mem_pool->lock);
+
+    nv_mem_pool_free_page_list(&reclaim_list, mem_pool->order);
+
+    return entries_freed;
+}
+
 static unsigned long
 nv_mem_pool_shrinker_scan
 (
@@ -544,30 +580,70 @@ nv_mem_pool_shrinker_scan
 )
 {
     nv_page_pool_t *mem_pool = nv_mem_pool_get_from_shrinker(shrinker);
-    unsigned long pages_remaining;
     unsigned long pages_freed;
-    struct list_head reclaim_list;
 
     if (sc->nid != mem_pool->node_id)
         return SHRINK_STOP;
 
-    INIT_LIST_HEAD(&reclaim_list);
-
-    if (os_acquire_mutex(mem_pool->lock) != NV_OK)
-        return SHRINK_STOP;
-    pages_remaining = sc->nr_to_scan;
-    pages_remaining = nv_mem_pool_move_pages(&reclaim_list, &mem_pool->dirty_list, pages_remaining);
-    pages_remaining = nv_mem_pool_move_pages(&reclaim_list, &mem_pool->clean_list, pages_remaining);
-    pages_freed = sc->nr_to_scan - pages_remaining;
-    mem_pool->pages_owned -= pages_freed;
-    os_release_mutex(mem_pool->lock);
-
-    nv_mem_pool_free_page_list(&reclaim_list, mem_pool->order);
+    pages_freed = nv_mem_pool_reclaim(mem_pool, sc->nr_to_scan);
 
     nv_printf(NV_DBG_MEMINFO, "NVRM: VM: %s: node=%d order=%u: %lu/%lu pages freed\n",
               __FUNCTION__, mem_pool->node_id, mem_pool->order, pages_freed, sc->nr_to_scan);
 
     return (pages_freed == 0) ? SHRINK_STOP : pages_freed;
+}
+
+/*
+ * Trim the system memory page pools down to at most retain_pages order-0
+ * pages in total. Called when a client closes its device or control file:
+ * the pools exist for intra-process reuse, and once the client that freed the
+ * pages is gone the cached pages are, from the OS's point of view, used
+ * memory that no process owns (invisible in /proc/meminfo, subtracted from
+ * MemAvailable) until the shrinker runs. Pools are walked from the largest
+ * page order down so the watermark keeps the entries that are most expensive
+ * to re-create. The scrubber may hold one entry per pool outside both lists
+ * while this runs; that entry is released by a later trim or the shrinker.
+ */
+void nv_trim_page_pools(unsigned long retain_pages)
+{
+    int node_id;
+    int order;
+    unsigned long retained = 0;
+
+    for_each_node(node_id)
+    {
+        for (order = NV_MAX_PAGE_ORDER; order >= 0; order--)
+        {
+            nv_page_pool_t *mem_pool = sysmem_page_pools[node_id][order];
+            unsigned long owned;
+            unsigned long keep_entries;
+            unsigned long freed;
+
+            if (mem_pool == NULL)
+                continue;
+
+            if (os_acquire_mutex(mem_pool->lock) != NV_OK)
+                continue;
+            owned = mem_pool->pages_owned;
+            os_release_mutex(mem_pool->lock);
+
+            if (owned == 0)
+                continue;
+
+            keep_entries = (retain_pages > retained) ? ((retain_pages - retained) >> order) : 0;
+            if (owned <= keep_entries)
+            {
+                retained += owned << order;
+                continue;
+            }
+
+            freed = nv_mem_pool_reclaim(mem_pool, owned - keep_entries);
+            retained += (owned - freed) << order;
+
+            nv_printf(NV_DBG_MEMINFO, "NVRM: VM: %s: node=%d order=%u: %lu/%lu pages freed, %lu kept\n",
+                      __FUNCTION__, mem_pool->node_id, mem_pool->order, freed, owned, owned - freed);
+        }
+    }
 }
 
 static void

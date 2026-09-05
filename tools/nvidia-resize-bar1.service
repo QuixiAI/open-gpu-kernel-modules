@@ -1,13 +1,20 @@
 [Unit]
 Description=Resize NVIDIA BAR1 to maximum (firmware allocates 256 MiB each boot)
-# Run late enough that the driver and persistenced exist, before real GPU users.
-After=multi-user.target
-Wants=multi-user.target
+# The script unloads the driver and kills every GPU user, so it has to run
+# before anything that opens the GPU: persistenced, the display manager and
+# your serving stack. Ordering against multi-user.target is not enough (the
+# units in that target are not ordered after the target itself), so GPU
+# consumers must declare  After=nvidia-resize-bar1.service  themselves.
+DefaultDependencies=no
+After=systemd-modules-load.service local-fs.target sysinit.target
+Before=nvidia-persistenced.service display-manager.service multi-user.target
+ConditionPathExists=/usr/local/sbin/resize-bar1.sh
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/resize-bar1.sh
 RemainAfterExit=yes
+StandardOutput=journal
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=sysinit.target

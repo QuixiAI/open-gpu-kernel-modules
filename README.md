@@ -59,7 +59,10 @@ surgical set of force-enables (one commit, four source files):
   already done by firmware; on server boards the in-place resize fails
   and `tools/resize-bar1.sh` finishes the job — see below.)
 - `src/nvidia/src/kernel/gpu/bif/kernel_bif.c` — force the P2P read/write
-  capabilities (`p2pOverride = 0x11`, bypassing the chipset allowlist) and
+  capabilities (`p2pOverride = 0x11`, bypassing the chipset allowlist;
+  bits 9:8 = 0 deliberately leave P2P *atomics* disabled, since the chipset
+  was never vetted for them — use `NVreg_RegistryDwords="ForceP2P=0x211"`
+  to allow atomics at your own risk) and
   default the PCIe P2P type to BAR1 (the modern replacement for the old
   `FORCE_P2P_TYPE_BAR1P2P` regkey, and exactly what
   `kbusIsPcieBar1P2PMappingSupported_GH100` checks).
@@ -137,16 +140,26 @@ cd open-gpu-kernel-modules
 ./install.sh
 ```
 
-`install.sh` does: `rmmod` → `make modules -j$(nproc)` →
-`make modules_install` → `depmod` → `nvidia-smi`.
+`install.sh` does: `make modules -j$(nproc)` → sign every `.ko` with the
+MOK when Secure Boot is on (aborts if there is no key or it is not
+enrolled: unsigned modules would be refused at boot and the box would
+come up GPU-less) → `rmmod` (aborts if `nvidia` is still loaded) →
+`make modules_install` → `depmod` → `modprobe` → verify the running
+version is the one just built → `nvidia-smi`.
+
+Secure Boot: Ubuntu keeps a MOK at `/var/lib/shim-signed/mok/MOK.{priv,der}`
+(created by `update-secureboot-policy --new-key`). Enrol it once with
+`sudo mokutil --import /var/lib/shim-signed/mok/MOK.der`, reboot, and
+choose *Enroll MOK* in the blue MokManager screen. `install.sh` checks
+`mokutil --test-key` before it unloads anything.
 
 Two gotchas we hit on a real box, so you don't have to:
 
 1. **`rmmod` fails with "Module nvidia is in use".** Anything holding
-   `/dev/nvidia*` keeps the old modules loaded and the install silently
-   ends with the *old* driver still active (the version string is
-   identical, so it looks fine). Stop every GPU process **and**
-   `nvidia-persistenced` first:
+   `/dev/nvidia*` keeps the old modules loaded. `install.sh` now aborts
+   here instead of installing over a live driver (earlier versions carried
+   on and left the *old* driver active with an identical version string).
+   Stop every GPU process **and** `nvidia-persistenced` first:
 
    ```bash
    sudo systemctl stop nvidia-persistenced

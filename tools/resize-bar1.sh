@@ -17,6 +17,19 @@
 # `pci=realloc` on the kernel command line is recommended.
 # The ReBAR register resets on reboot -- run this every boot (systemd unit
 # in tools/nvidia-resize-bar1.service).
+#
+# What it kills and what it refuses:
+#   - `fuser -k /dev/nvidia*` terminates EVERY process holding a GPU,
+#     including a display server. This script is for headless servers; on a
+#     desktop run it from a text console with the display manager stopped.
+#   - Step 3 removes whole root-port subtrees. If anything other than NVIDIA
+#     GPU functions (an NVMe, a NIC, a USB controller) sits under one of those
+#     ports, the script ABORTS before touching anything -- yanking the boot
+#     NVMe would hang the box. Override with RESIZE_BAR1_FORCE=1 only if you
+#     know the sibling survives a remove/rescan.
+#   - After the rescan it verifies BAR1 was actually assigned at the new size
+#     before loading the driver, and fails loudly if the kernel logged
+#     "can't assign; no space" (MMIO aperture too small, see README).
 set -u
 
 echo "== stopping GPU users, unloading driver =="
@@ -92,12 +105,32 @@ PY
 
 echo "== removing GPU root-port subtrees =="
 ports=""
-for dev in $(lspci -d 10de: -D | awk '$2 ~ /^(VGA|3D)/ {print $1}'); do
+gpus=$(lspci -d 10de: -D | awk '$2 ~ /^(VGA|3D)/ {print $1}')
+for dev in $gpus; do
   p=$(readlink -f /sys/bus/pci/devices/$dev)
   port=$(echo "$p" | grep -o '[0-9a-f]\{4\}:[0-9a-f]\{2\}:[0-9a-f]\{2\}\.[0-9a-f]' | head -1)
   case " $ports " in *" $port "*) ;; *) ports="$ports $port";; esac
 done
 echo "root ports:$ports"
+
+# Refuse to remove a subtree that contains anything but NVIDIA functions
+# (the GPU itself plus its audio/USB-C/UCSI companions on consumer boards).
+foreign=""
+for port in $ports; do
+  for d in $(find /sys/bus/pci/devices/$port/ -mindepth 2 -maxdepth 8 -name 'vendor' 2>/dev/null); do
+    dev=$(basename "$(dirname "$d")"); vendor=$(cat "$d")
+    [ "$vendor" = "0x10de" ] && continue
+    foreign="$foreign $dev($vendor under $port)"
+  done
+done
+if [ -n "$foreign" ] && [ "${RESIZE_BAR1_FORCE:-0}" != "1" ]; then
+  echo "ABORT: non-NVIDIA devices share a GPU root port and would be removed too:$foreign"
+  echo "       (set RESIZE_BAR1_FORCE=1 to proceed anyway). Reloading the driver at the old BAR size."
+  modprobe nvidia && modprobe nvidia_uvm && modprobe nvidia_modeset
+  systemctl start nvidia-persistenced 2>/dev/null
+  exit 1
+fi
+
 for port in $ports; do
   echo "  removing $port"
   echo 1 > /sys/bus/pci/devices/$port/remove
@@ -108,9 +141,30 @@ echo "== rescanning PCI bus =="
 echo 1 > /sys/bus/pci/rescan
 sleep 3
 
+echo "== verifying BAR1 assignment =="
+bad=0
+for dev in $(lspci -d 10de: -D | awk '$2 ~ /^(VGA|3D)/ {print $1}'); do
+  res=/sys/bus/pci/devices/$dev/resource
+  [ -r "$res" ] || { echo "  $dev: gone after rescan"; bad=1; continue; }
+  # line 2 of 'resource' is BAR1: start end flags
+  read -r start end flags < <(sed -n 2p "$res")
+  if [ "$start" = "0x0000000000000000" ] && [ "$end" = "0x0000000000000000" ]; then
+    echo "  $dev: BAR1 NOT ASSIGNED (kernel could not fit it; enlarge the MMIO aperture, see README)"; bad=1
+  else
+    echo "  $dev: BAR1 $(( ( end - start + 1 ) >> 20 )) MiB"
+  fi
+done
+if dmesg | tail -200 | grep -q "BAR 1 .*can't assign; no space"; then
+  echo "  dmesg: 'BAR 1 ... can't assign; no space' seen"; bad=1
+fi
+if [ $bad -ne 0 ]; then
+  echo "FAIL: BAR1 resize did not take effect; loading the driver anyway so the box stays usable, but P2P will be limited."
+fi
+
 echo "== reloading driver =="
 modprobe nvidia && modprobe nvidia_uvm && modprobe nvidia_modeset
 systemctl start nvidia-persistenced 2>/dev/null
 sleep 2
 echo "== BAR1 sizes now =="
 nvidia-smi -q | grep -A1 "BAR1 Memory" | grep Total
+exit $bad

@@ -15,7 +15,7 @@ modules are staged in `/home/eric/spark-driver-ab/`.
 
 | # | Finding | Kind | Impact | Status |
 |---|---|---|---|---|
-| A | GPU-initiated faults on system-allocated (ATS) memory are serviced through `migrate_vma` one 4 KiB page at a time: 0.43 GiB/s first-touch, never a huge page, 16 M random accesses/s afterwards (220x slower than the cudaMalloc pool) | nvidia-uvm performance | Anything that lets the GPU read pageable memory directly on Spark: mmap'd model files (llama.cpp default), `cudaMallocManaged`, HMM. A 60 GB model faulted in by the GPU costs ~140 s and stays on 4 KiB pages | Root-caused, patched (`uvm_ats_faults.c`), builds on 610.43.02 and 610.57.04, signed. A/B blocked on MOK enrollment |
+| A | GPU-initiated faults on system-allocated (ATS) memory are serviced through `migrate_vma` one 4 KiB page at a time: 0.43 GiB/s first-touch, never a huge page, 16 M random accesses/s afterwards (220x slower than the cudaMalloc pool) | nvidia-uvm performance | Anything that lets the GPU read pageable memory directly on Spark: mmap'd model files (llama.cpp default), `cudaMallocManaged`, HMM. A 60 GB model faulted in by the GPU costs ~140 s and stays on 4 KiB pages | **A/B WIN (2026-09-05, Secure Boot off):** GPU first touch 0.42 -> 1.19 GiB/s at 4 KiB, 0.44 -> 19.6 GiB/s with THP (4096 of 4096 MiB huge-page backed, was 0), random access 17 -> 207 M acc/s; reversal leg matches stock |
 | B | Freed system pages stay in the driver's page pools after the owning process exits: 55 GiB of `MemAvailable` vanished after a 64 GiB process exit, invisible in `/proc/meminfo`, no process in `nvidia-smi` | nvidia.ko correctness (memory accounting) | Breaks any user-space free-memory check on unified-memory boxes (vLLM startup). Workaround today is `drop_caches` | Implemented per `drain-on-last-client-close.md`: trim primitive, `NVreg_SystemMemoryPoolRetainMB`, triggers on device and control close. Builds, signed. A/B blocked on MOK enrollment |
 | C | Steady-state decode data path: no driver lever. Pages are already 2 MiB end to end (RM allocation, GMMU, SMMU), translation reach is not a limiter, bandwidth is at 97% of spec, clocks and the ~90 W cap are GSP firmware policy | measurement | The 2 MiB sysmem regkey and the ZERO_FB large-page patch idea are no-ops (A/B/A NOWIN). c8-c32 tok/s multipliers are above the driver | Closed |
 | D | Blocking-sync cost is CPU idle-state exit latency, not the driver's interrupt path | measurement | 7% per step with LPI-2/3 enabled, 1% with them disabled | Closed, platform tuning note |
@@ -147,7 +147,24 @@ pass is worth checking, it doubles the populate cost.
 Builds on both 610.43.02 (system source) and 610.57.04 (this tree). Same warnings as
 stock (two `nv-mmap.c` `-Waddress`, the aarch64 `os_dbg_breakpoint` `#warning`).
 
-### 3.4 Workaround available today, no driver change
+### 3.4 A/B result (stock -> patched -> stock, desktop up, only nvidia-uvm swapped)
+
+| | Stock | Patched | Stock again |
+|---|---|---|---|
+| GPU first touch, THP off | 0.42 GiB/s | **1.19 GiB/s** | 0.38 GiB/s |
+| GPU first touch, `MADV_HUGEPAGE` | 0.44 GiB/s, 0 MiB THP | **19.6 GiB/s, 4096 MiB THP** | 0.38 GiB/s, 0 MiB THP |
+| Random 4K-page lines after GPU touch + THP | 17 M acc/s | **207 M acc/s** | 17 M acc/s |
+| CPU first touch with THP (control) | 30.0 GiB/s | 30.1 GiB/s | 28.2 GiB/s |
+| cudaMalloc pool stream (control) | 256 GB/s | 256 GB/s | 255 GB/s |
+
+Verdict: WIN. GPU-initiated faults now produce transparent huge pages exactly as a CPU
+touch does, the fault-in rate is 2.8x better at 4 KiB and 45x better with THP, and the
+GPU's random access to that memory afterwards is 12x better. Controls did not move.
+Raw log: `/home/eric/spark-driver-ab/ab.log`. The remaining gap to the CPU touch at
+4 KiB (1.19 vs 5 GiB/s) is the per-page fault-buffer round trip plus the double
+`handle_mm_fault` pass; both are follow-ups, not blockers.
+
+### 3.5 Workaround available today, no driver change
 
 Touch the memory from the CPU first with `madvise(MADV_HUGEPAGE)` (THP is `madvise`
 on this box) before handing it to the GPU. That is the 28 GiB/s / 208 M acc/s row.
@@ -206,7 +223,9 @@ Implemented as specified in that document, with these notes:
 
 ## 5. What is needed to run the A/Bs
 
-Secure Boot enforces module signatures (`lockdown: integrity`, `sig_enforce=Y`) and
+Secure Boot was turned off on 2026-09-05 (lockdown none), so the staged modules load
+without enrolment; the notes below apply if it is turned back on. Secure Boot enforces
+module signatures (`lockdown: integrity`, `sig_enforce=Y`) and
 the only enrolled key is Canonical's. The staged modules are signed with
 `/var/lib/shim-signed/mok/MOK.der`, which is present but not enrolled
 (`mokutil --test-key` says so; `insmod` answers "Key was rejected by service").

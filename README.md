@@ -317,7 +317,8 @@ NVreg_SystemMemoryPoolRetainMB   default 0
 - `N` keeps up to N MiB pooled, largest page orders first. Use this if
   something on the box allocates and frees during serving (CUDA graph
   capture churn) and `nvidia-smi` polling keeps draining its warm pool.
-- `0xFFFFFFFF` disables the trim and restores the old behaviour.
+- `-1` (stored as `0xFFFFFFFF`) disables the trim and restores the old
+  behaviour. Module parameters parse as signed integers, so write `-1`.
 
 `NVreg_EnableSystemMemoryPools=0` (the no-source-change workaround, which
 disables pool creation entirely) still works and composes with this; with

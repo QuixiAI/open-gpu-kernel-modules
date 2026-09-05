@@ -999,7 +999,10 @@
  *
  * 0 (default) returns all pooled pages to the OS on every client close.
  * 0xFFFFFFFF disables trimming on client close: pools grow without bound
- * until the kernel's memory-pressure shrinker reclaims them.
+ * until the kernel's memory-pressure shrinker reclaims them. Module
+ * parameters are parsed as signed 32-bit integers, so pass this as -1
+ * (e.g. NVreg_SystemMemoryPoolRetainMB=-1); 0xFFFFFFFF itself is rejected
+ * with ERANGE at load time.
  * Any other value keeps up to that many MiB pooled, largest page orders
  * first.
  *

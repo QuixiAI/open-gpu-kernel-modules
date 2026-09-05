@@ -16,7 +16,7 @@ modules are staged in `/home/eric/spark-driver-ab/`.
 | # | Finding | Kind | Impact | Status |
 |---|---|---|---|---|
 | A | GPU-initiated faults on system-allocated (ATS) memory are serviced through `migrate_vma` one 4 KiB page at a time: 0.43 GiB/s first-touch, never a huge page, 16 M random accesses/s afterwards (220x slower than the cudaMalloc pool) | nvidia-uvm performance | Anything that lets the GPU read pageable memory directly on Spark: mmap'd model files (llama.cpp default), `cudaMallocManaged`, HMM. A 60 GB model faulted in by the GPU costs ~140 s and stays on 4 KiB pages | **A/B WIN (2026-09-05, Secure Boot off):** GPU first touch 0.42 -> 1.19 GiB/s at 4 KiB, 0.44 -> 19.6 GiB/s with THP (4096 of 4096 MiB huge-page backed, was 0), random access 17 -> 207 M acc/s; reversal leg matches stock |
-| B | Freed system pages stay in the driver's page pools after the owning process exits: 55 GiB of `MemAvailable` vanished after a 64 GiB process exit, invisible in `/proc/meminfo`, no process in `nvidia-smi` | nvidia.ko correctness (memory accounting) | Breaks any user-space free-memory check on unified-memory boxes (vLLM startup). Workaround today is `drop_caches` | Implemented per `drain-on-last-client-close.md`: trim primitive, `NVreg_SystemMemoryPoolRetainMB`, triggers on device and control close. Builds, signed. A/B blocked on MOK enrollment |
+| B | Freed system pages stay in the driver's page pools after the owning process exits: 55 GiB of `MemAvailable` vanished after a 64 GiB process exit, invisible in `/proc/meminfo`, no process in `nvidia-smi` | nvidia.ko correctness (memory accounting) | Breaks any user-space free-memory check on unified-memory boxes (vLLM startup). Workaround today is `drop_caches` | **Acceptance PASSED (2026-09-05):** MemAvailable 119.0 -> 119.1 GiB ten seconds after a 64 GiB process exits (stock: 119.2 -> 55.0); watermark 4096 keeps 4.3 GiB; sentinel -1 restores the old behaviour; pools-disabled composes; 20-cycle churn under a holder and a memory hog with zero new NVRM warnings |
 | C | Steady-state decode data path: no driver lever. Pages are already 2 MiB end to end (RM allocation, GMMU, SMMU), translation reach is not a limiter, bandwidth is at 97% of spec, clocks and the ~90 W cap are GSP firmware policy | measurement | The 2 MiB sysmem regkey and the ZERO_FB large-page patch idea are no-ops (A/B/A NOWIN). c8-c32 tok/s multipliers are above the driver | Closed |
 | D | Blocking-sync cost is CPU idle-state exit latency, not the driver's interrupt path | measurement | 7% per step with LPI-2/3 enabled, 1% with them disabled | Closed, platform tuning note |
 | E | P2P fork changes: eight review findings, two of which can leave a box without a working GPU (`install.sh` unload-before-`set -e`; unsigned modules on Secure Boot) | fork code quality | Multi-GPU consumer boards; inert on Spark | Findings 1-7 fixed on this branch (two commits); 8 is not an issue by the owner's rule |
@@ -213,7 +213,29 @@ Implemented as specified in that document, with these notes:
   later rebase onto upstream PR 1004 stays trivial. Nothing upstream trims or caps
   the pools; this is new work, and the document's suggestion of an upstream issue
   plus PR once validated stands.
-- Acceptance tests 2-7 need the patched `nvidia.ko` loaded, which needs every GPU user
+- Acceptance results (driver `610.43.02` built from `/usr/src/nvidia-610.43.02` with the
+  patch, loaded from a modprobe override directory with gdm stopped, stock restored after;
+  raw logs `pooltrim.run2.log` and `pooltrim.log` in `/home/eric/spark-driver-ab/`):
+
+  | # | Configuration | MemAvailable before | 10 s after 64 GiB process exit | Result |
+  |---|---|---|---|---|
+  | 1 | stock 610.43.02 | 119.2 GiB | 55.0 GiB | failing case reproduced |
+  | 2 | patched, `RetainMB=0` (default) | 119.0 GiB | 119.1 GiB | PASS |
+  | 3 | patched, `RetainMB=4096` | 119.2 GiB | 114.9 GiB (4.3 GiB retained) | PASS |
+  | 4 | patched, `RetainMB=-1` (disable) | 119.0 GiB | 54.4 GiB (phantom returns) | PASS |
+  | 5 | patched, `EnableSystemMemoryPools=0` | 118.8 GiB | 119.2 GiB, no oops | PASS |
+  | 6 | churn: 20 x alloc 32 GiB/free/exit, 16 GiB holder, host memory hog | | 117.4 GiB after, 0 new NVRM warnings | PASS |
+  | 7 | vLLM startup check | | not run (SlimServe out of scope this session; `RUN_SLIMSERVE_TEST=1` in the script) | skipped |
+
+  Two things learned running it: the module parameter is a signed 32-bit int, so the
+  disable sentinel must be passed as `-1` (`0xFFFFFFFF` is rejected with ERANGE at load;
+  `nv-reg.h` and the README now say so), and NVreg parameters are registered with
+  permission 0, so they never appear under `/sys/module/nvidia/parameters/`; read them
+  from `/proc/driver/nvidia/params`. The box's udev rule reloads the packaged
+  nvidia-uvm/modeset/drm the instant `nvidia.ko` binds, so a test loader must make
+  `modprobe` itself resolve to the patched modules (an `updates/` override directory plus
+  `depmod`) rather than race udev with `insmod`.
+- Acceptance tests 2-7 originally needed the patched `nvidia.ko` loaded, which needs every GPU user
   gone (desktop down) and the MOK enrolled. `/home/eric/spark-driver-ab/run_pooltrim_ab.sh`
   runs tests 1-6 detached, restores stock and gdm, and logs to `pooltrim.log`. Test 6
   (20 allocate/free/exit cycles against a 16 GiB holder and a host memory hog, `stress-ng`

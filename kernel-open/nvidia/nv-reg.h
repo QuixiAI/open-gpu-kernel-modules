@@ -760,9 +760,12 @@
  * BAR1 to match framebuffer size, or the next largest available size on
  * supported machines. This is currently only implemented for Linux.
  *
+ * This fork defaults it to 1 so BAR1 grows to cover the framebuffer and the
+ * static BAR1 mapping that BAR1 P2P needs auto-enables. Set 0 to opt out.
+ *
  * Possible values:
  *  0 - Do not enable PCI BAR resizing
- *  1 - Enable PCI BAR resizing
+ *  1 - Enable PCI BAR resizing (default in this fork)
  */
 #define __NV_ENABLE_RESIZABLE_BAR EnableResizableBar
 #define NV_REG_ENABLE_RESIZABLE_BAR NV_REG_STRING(__NV_ENABLE_RESIZABLE_BAR)
@@ -1077,7 +1080,7 @@ NV_DEFINE_REG_ENTRY_GLOBAL(__NV_NVLINK_DISABLE, 0);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_ENABLE_PCIE_RELAXED_ORDERING_MODE, 0);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_REGISTER_PCI_DRIVER, 1);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_REGISTER_PLATFORM_DEVICE_DRIVER, 1);
-NV_DEFINE_REG_ENTRY_GLOBAL(__NV_ENABLE_RESIZABLE_BAR, 0);
+NV_DEFINE_REG_ENTRY_GLOBAL(__NV_ENABLE_RESIZABLE_BAR, 1);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_ENABLE_DBG_BREAKPOINT, 0);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_TEGRA_GPU_PG_MASK, 0);
 NV_DEFINE_REG_ENTRY_GLOBAL(__NV_ENABLE_NONBLOCKING_OPEN, 1);

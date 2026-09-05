@@ -1064,6 +1064,12 @@ static void __nvoc_init_funcTable_KernelBus_1(KernelBus *pThis, GpuHalspecOwner 
         pThis->__kbusGetBar1P2PDmaInfo__ = &kbusGetBar1P2PDmaInfo_GH100;
     }
     // default
+    //
+    // QuixiAI P2P fork: this generated file has no shipped generator, so the
+    // default arm is edited by hand. Both arms intentionally point at the
+    // chip-independent GH100 body: every pre-Hopper die (Turing/Ampere/Ada)
+    // gets BAR1 P2P instead of the NOT_SUPPORTED / NV_FALSE stubs. Keep the
+    // duplicate arms when rebasing; collapsing them changes nothing at runtime.
     else
     {
         pThis->__kbusGetBar1P2PDmaInfo__ = &kbusGetBar1P2PDmaInfo_GH100;
@@ -1112,6 +1118,12 @@ static void __nvoc_init_funcTable_KernelBus_1(KernelBus *pThis, GpuHalspecOwner 
         pThis->__kbusCreateP2PMappingForBar1P2P__ = &kbusCreateP2PMappingForBar1P2P_GH100;
     }
     // default
+    //
+    // QuixiAI P2P fork: this generated file has no shipped generator, so the
+    // default arm is edited by hand. Both arms intentionally point at the
+    // chip-independent GH100 body: every pre-Hopper die (Turing/Ampere/Ada)
+    // gets BAR1 P2P instead of the NOT_SUPPORTED / NV_FALSE stubs. Keep the
+    // duplicate arms when rebasing; collapsing them changes nothing at runtime.
     else
     {
         pThis->__kbusCreateP2PMappingForBar1P2P__ = &kbusCreateP2PMappingForBar1P2P_GH100;
@@ -1124,6 +1136,12 @@ static void __nvoc_init_funcTable_KernelBus_1(KernelBus *pThis, GpuHalspecOwner 
         pThis->__kbusRemoveP2PMappingForBar1P2P__ = &kbusRemoveP2PMappingForBar1P2P_GH100;
     }
     // default
+    //
+    // QuixiAI P2P fork: this generated file has no shipped generator, so the
+    // default arm is edited by hand. Both arms intentionally point at the
+    // chip-independent GH100 body: every pre-Hopper die (Turing/Ampere/Ada)
+    // gets BAR1 P2P instead of the NOT_SUPPORTED / NV_FALSE stubs. Keep the
+    // duplicate arms when rebasing; collapsing them changes nothing at runtime.
     else
     {
         pThis->__kbusRemoveP2PMappingForBar1P2P__ = &kbusRemoveP2PMappingForBar1P2P_GH100;
@@ -1136,6 +1154,12 @@ static void __nvoc_init_funcTable_KernelBus_1(KernelBus *pThis, GpuHalspecOwner 
         pThis->__kbusHasPcieBar1P2PMapping__ = &kbusHasPcieBar1P2PMapping_GH100;
     }
     // default
+    //
+    // QuixiAI P2P fork: this generated file has no shipped generator, so the
+    // default arm is edited by hand. Both arms intentionally point at the
+    // chip-independent GH100 body: every pre-Hopper die (Turing/Ampere/Ada)
+    // gets BAR1 P2P instead of the NOT_SUPPORTED / NV_FALSE stubs. Keep the
+    // duplicate arms when rebasing; collapsing them changes nothing at runtime.
     else
     {
         pThis->__kbusHasPcieBar1P2PMapping__ = &kbusHasPcieBar1P2PMapping_GH100;
@@ -1148,6 +1172,12 @@ static void __nvoc_init_funcTable_KernelBus_1(KernelBus *pThis, GpuHalspecOwner 
         pThis->__kbusIsPcieBar1P2PMappingSupported__ = &kbusIsPcieBar1P2PMappingSupported_GH100;
     }
     // default
+    //
+    // QuixiAI P2P fork: this generated file has no shipped generator, so the
+    // default arm is edited by hand. Both arms intentionally point at the
+    // chip-independent GH100 body: every pre-Hopper die (Turing/Ampere/Ada)
+    // gets BAR1 P2P instead of the NOT_SUPPORTED / NV_FALSE stubs. Keep the
+    // duplicate arms when rebasing; collapsing them changes nothing at runtime.
     else
     {
         pThis->__kbusIsPcieBar1P2PMappingSupported__ = &kbusIsPcieBar1P2PMappingSupported_GH100;

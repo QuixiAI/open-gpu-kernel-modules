@@ -272,6 +272,28 @@ if it runs under gdm; read `pooltrim.log` afterwards):
 /home/eric/spark-driver-ab/run_pooltrim_ab.sh
 ```
 
+## 5b. Installed permanently on the Spark (2026-09-05)
+
+`install.sh` from this tree was not used: it would install 610.57.04 modules against the
+box's 610.43.02 user space, and NVIDIA requires the two to match exactly. Instead the two
+Spark commits (pool trim, UVM ATS populate; the nv-reg.h ReBAR default left at stock) were
+applied to a copy of the packaged source, `/usr/src/nvidia-spark-610.43.02`, with a
+`dkms.conf` (package `nvidia-spark`, version 610.43.02, `AUTOINSTALL=yes`, and
+`KERNELRELEASE=` appended to the make line because DKMS 3.x injects that variable and it
+flips NVIDIA's Makefile into its Kbuild-include mode). `dkms install --force` placed all
+five modules in `/lib/modules/6.17.0-1032-nvidia/updates/dkms/`, which depmod searches
+before the packaged `kernel/nvidia-610-open/`. The initramfs does not carry the nvidia
+modules on this box, so nothing there needed rebuilding. The driver was reloaded with the
+desktop stopped and confirmed: `/proc/driver/nvidia/params` shows
+`SystemMemoryPoolRetainMB: 0`, `nvidia_uvm` srcversion matches the A/B-tested build, and a
+64 GiB process exit returns MemAvailable within seconds. `dkms status` reports
+`nvidia-spark/610.43.02 ... installed`.
+
+To revert: `sudo dkms remove -m nvidia-spark -v 610.43.02 --all` then reload the driver or
+reboot; the packaged modules are untouched underneath. A kernel upgrade rebuilds the
+patched modules automatically through DKMS as long as the 610.43.02 source still compiles
+against the new kernel.
+
 ## 6. Smaller observations
 
 - The GPU's PCIe config space reports `LnkSta: 2.5GT/s x1 (downgraded)` against

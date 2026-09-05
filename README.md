@@ -378,6 +378,45 @@ unusable.
 The full measurements, and the A/B kit for both changes, are in
 `driver_improvement_findings.md`.
 
+### Installing on a Spark
+
+Do **not** use `install.sh` from this tree on a Spark unless its user space
+is also 610.57.04: the Ubuntu Spark image ships 610.43.02 user space and
+NVIDIA's kernel and user components must match exactly. Apply the two
+Spark commits to the packaged source instead and let DKMS own it:
+
+```bash
+sudo cp -r /usr/src/nvidia-610.43.02 /usr/src/nvidia-spark-610.43.02
+cd /usr/src/nvidia-spark-610.43.02
+git -C ~/open-gpu-kernel-modules diff 7493f4cd..HEAD -- \
+    kernel-open/nvidia/nv-vm.c kernel-open/nvidia/nv.c \
+    kernel-open/common/inc/nv-proto.h kernel-open/nvidia-uvm/uvm_ats_faults.c \
+    kernel-open/nvidia/nv-reg.h | sudo patch -p2
+sudo tee dkms.conf >/dev/null <<'EOF'
+PACKAGE_NAME="nvidia-spark"
+PACKAGE_VERSION="610.43.02"
+MAKE[0]="make -j$(nproc) modules KERNEL_UNAME=${kernelver} KERNELRELEASE="
+CLEAN="make clean KERNEL_UNAME=${kernelver} KERNELRELEASE="
+BUILT_MODULE_NAME[0]="nvidia"         DEST_MODULE_LOCATION[0]="/updates/dkms"
+BUILT_MODULE_NAME[1]="nvidia-uvm"     DEST_MODULE_LOCATION[1]="/updates/dkms"
+BUILT_MODULE_NAME[2]="nvidia-modeset" DEST_MODULE_LOCATION[2]="/updates/dkms"
+BUILT_MODULE_NAME[3]="nvidia-drm"     DEST_MODULE_LOCATION[3]="/updates/dkms"
+BUILT_MODULE_NAME[4]="nvidia-peermem" DEST_MODULE_LOCATION[4]="/updates/dkms"
+AUTOINSTALL="yes"
+EOF
+sudo dkms add -m nvidia-spark -v 610.43.02
+sudo dkms build -m nvidia-spark -v 610.43.02
+sudo dkms install --force -m nvidia-spark -v 610.43.02   # --force: same version string as the packaged modules
+```
+
+Then reboot (or stop the display manager, unload and reload the driver).
+`grep SystemMemoryPoolRetainMB /proc/driver/nvidia/params` proves the
+patched `nvidia.ko` is running. The `KERNELRELEASE=` at the end of the make
+line matters: DKMS 3.x passes that variable itself, which switches NVIDIA's
+Makefile into its "called from Kbuild" mode and the build fails on
+`/Kbuild`. Revert with `sudo dkms remove -m nvidia-spark -v 610.43.02 --all`;
+the packaged modules are untouched underneath.
+
 ## NCCL on many-GPU PCIe boxes
 
 Two settings decide whether NCCL actually uses the fast path:

@@ -53,6 +53,7 @@ namespace DisplayPort
         bool            bIsHeadShutdownNeeded;      // Set if head shutdown is requested during modeset
         bool            hdcpEnabled;
         bool            hdcpPreviousStatus;
+        bool            isDestroying;               // True once destroy() has begun teardown; suppresses re-entrant callbacks
         bool            qseEncryptionStatusMismatch;
         bool            bWaitForDeAllocACT;
         bool            bDeferredPayloadAlloc;
@@ -79,6 +80,7 @@ namespace DisplayPort
               bIsHeadShutdownNeeded(true),
               hdcpEnabled(false),
               hdcpPreviousStatus(false),
+              isDestroying(false),
               qseEncryptionStatusMismatch(false),
               bWaitForDeAllocACT(false),
               dscModeRequest(DSC_MODE_NONE),
@@ -123,6 +125,12 @@ namespace DisplayPort
         char tagMSTQSEandSetECF;
         unsigned QSESetECFRetries;                  // Retry counter for MST QSE and set ECF.
         virtual void hdcpMSTQSEandSetECF();
+
+        // Bug 5764757: returns false if QSES is moot for this group's
+        // stream - either the group targets a Logical Port (0x8..0xF)
+        // or the link uses 128b/132b channel coding (UHBR/HDCP 2.x).
+        // Gated by all QSES dispatch sites. See dp_groupimpl.cpp.
+        bool isQSESApplicable();
 
         unsigned authRetries;                       // Retry counter for the authentication.
 

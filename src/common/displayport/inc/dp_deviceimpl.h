@@ -48,7 +48,26 @@ namespace DisplayPort
     #define HDCP_I2C_CLIENT_ADDR  0x74
     #define DEVICE_OUI_SIZE       3
     #define DSC_CAPS_SIZE         16
+    #define PCLK_MHZ_TO_HZ        1000000U
+    #define HDMI2_MAX_TMDS_CLK_RATE_HZ  600000000ULL
 
+    #define CTA861_EXT_TAG                      0x02
+    #define CTA861_EXT_TAG_OFFSET               0x00
+    #define CTA861_EXT_REVISION_OFFSET          0x01
+    #define CTA861_EXT_MIN_REVISION             0x03
+    #define CTA861_EXT_DTD_START_OFFSET         0x02
+    #define CTA861_DATA_BLOCK_START             0x04
+    #define CTA861_DATA_BLOCK_TAG_SHIFT         5
+    #define CTA861_DATA_BLOCK_LEN_MASK          0x1FU
+    #define CTA861_DATA_BLOCK_TAG_VENDOR        0x03
+    #define CTA861_VSDB_OUI_SIZE                3
+    #define CTA861_VSDB_OUI_HDMI_FORUM          0xC45DD8U
+    #define CTA861_VSDB_OUI_HDMI_LLC            0x000C03U
+    #define HF_VSDB_MAX_TMDS_RATE_OFFSET        4
+    #define HF_VSDB_MIN_PAYLOAD_SIZE            5
+    #define HDMI_VSDB_MAX_TMDS_CLK_OFFSET       6
+    #define HDMI_VSDB_MIN_PAYLOAD_SIZE          7
+    #define EDID_TMDS_RATE_UNIT_HZ              5000000ULL
     struct GroupImpl;
     struct ConnectorImpl;
     class DeviceHDCPDetection;
@@ -158,6 +177,7 @@ namespace DisplayPort
         bool            isPendingHDCPCapDone();
 
         TriState        isHDCPCap;
+        bool            isHdcp2XCap; // if isHDCPCap and isHdcp2XCap both true then nvBCaps is for 2X
         bool            isDeviceHDCPDetectionAlive;
         DeviceHDCPDetection * deviceHDCPDetection;
 
@@ -175,11 +195,15 @@ namespace DisplayPort
         // DSC fields
         NvU8    rawDscCaps[16];
         DscCaps dscCaps;
+        NvBool  bMaxUncompressedPixelRateValid;
+        NvU64   maxUncompressedPixelRate;
 
         // Panel replay Caps
         PanelReplayCaps prCaps;
         // ALPM caps
         AlpmCaps alpmCaps;
+        NvU16 panelFwSwRevision;
+        bool  bPanelFwSwRevisionValid;
         bool bIsFakedMuxDevice;
         bool bIsPreviouslyFakedMuxDevice;
         bool bisMarkedForDeletion;
@@ -313,6 +337,8 @@ namespace DisplayPort
 
         virtual TriState hdcpAvailableHop();
         virtual TriState hdcpAvailable();
+        virtual bool     isHdcp1XCapable();
+        virtual bool     isHdcp2XCapable();
 
         virtual bool isMSAOverMSTCapable()
         {
@@ -472,6 +498,11 @@ namespace DisplayPort
         bool setPanelReplayConfig(panelReplayConfig prcfg);
         bool getPanelReplayConfig(panelReplayConfig *pPrcfg);
         bool getPanelReplayStatus(PanelReplayStatus *pPrStatus);
+        //
+        // When DP_ENABLE_PANEL_FW_REVISION_CACHE is set, do not
+        // re-read panel firmware revision if it's valid
+        //
+        bool readPanelFwSwRevision(void);
         NvBool isSelectiveUpdateSupported(void);
         NvBool isEarlyRegionTpSupported(void);
         NvBool enableAdaptiveSyncSdp(NvBool enable);
@@ -485,6 +516,10 @@ namespace DisplayPort
         NvBool isAuxLessAlpmSupported(void);
 
         NvBool getDSCSupport();
+        void resetDscAndFecCaps();
+        void   setMaxUncompressedPixelRateValid();
+        NvBool getMaxUncompressedPixelRateValid();
+        NvU64  getMaxUncompressedPixelRate();
         bool getFECSupport();
         NvBool isDSCPassThroughSupported();
         NvBool isDynamicPPSSupported();

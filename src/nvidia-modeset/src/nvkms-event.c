@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2008-2019 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2008-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -203,6 +203,9 @@ nvHandleHotplugEventDeferredWork(void *dataPtr, NvU32 dataU32)
         } else {
             nvSendDpyEventEvo(pDpyEvo, NVKMS_EVENT_TYPE_DPY_CHANGED);
         }
+
+        nvHdmiReportExtconVideoState(pConnectorEvo, FALSE);
+        nvHdmiReportExtconAudioState(pConnectorEvo, FALSE);
     }
 
     // Finally, connect devices that are in the plug mask.
@@ -214,8 +217,10 @@ nvHandleHotplugEventDeferredWork(void *dataPtr, NvU32 dataU32)
         } else {
             nvSendDpyEventEvo(pDpyEvo, NVKMS_EVENT_TYPE_DPY_CHANGED);
         }
-        
+
         pDpyEvo->hotplugged = TRUE;
+
+        nvHdmiReportExtconVideoState(pConnectorEvo, TRUE);
     }
 }
 
@@ -245,3 +250,122 @@ nvHandleHDMIFRLRetrainEventDeferredWork(void *dataPtr, NvU32 dataU32)
     nvSendDpyEventEvo(pDpyEvo, NVKMS_EVENT_TYPE_DPY_CHANGED);
     pDpyEvo->hdmi.reassessFrlLinkCaps = TRUE;
 }
+
+
+/*
+ * Handle Content Protection Event
+ *
+ * dataU32 has top 8 bits to identify the type of hdcp event and bottom 24 bits
+ * specify the displayId on which event occured.
+ *
+ * Event is identified by enum HDCPSTATUSCHANGENOTIF
+ *   - hdcpStatusChangeNotif_EncEnabled says hdcp is enabled.
+ *   - hdcpStatusChangeNotif_RepComplete/hdcpStatusChangeNotif_KsvOk says
+ *     hdcp topology is available to be read.
+ *   - Other values says hdcp is disabled.
+ *
+ */
+
+typedef enum
+{
+    hdcpStatusChangeNotif_DontCare = 0,
+    hdcpStatusChangeNotif_EncEnabled,
+    hdcpStatusChangeNotif_RepComplete,
+    hdcpStatusChangeNotif_KsvOk,
+    hdcpStatusChangeNotif_HdcpDisabled,
+    hdcpStatusChangeNotif_HdcpInactive,
+    hdcpStatusChangeNotif_LinkFailed,
+    hdcpStatusChangeNotif_HdcpRestart,
+    hdcpStatusChangeNotif_HdcpFailed
+} HDCPSTATUSCHANGENOTIF, *PHDCPSTATUSCHANGENOTIF;
+
+void
+nvHandleCpEventDeferredWork(void *dataPtr, NvU32 dataU32)
+{
+    NVDispEvoPtr pDispEvo = dataPtr;
+    NvU32 displayId = dataU32 & 0x00FFFFFFU;
+    NvU32 hdcpStatusChangeNotif = ((dataU32 & 0xFF000000) >> 24);
+    NVDpyId id = nvNvU32ToDpyId(displayId);
+
+    /*
+     * For SST and HDMI: RM sends the connector's static displayId, which is
+     * also the id of the single root NVDpyEvoRec allocated in AllocDpys().
+     * The lookup succeeds directly.
+     *
+     * For HDCP2X DP-MST: RM sends the parent connector's static displayId.
+     * Same as SST — the root NVDpyEvoRec for the connector has that id,
+     * so the lookup succeeds directly.
+     *
+     * For HDCP1X DP-MST: RM sends the dynamically allocated child displayId
+     * (from NV0073_CTRL_CMD_DP_TOPOLOGY_ALLOCATE_DISPLAYID). No NVDpyEvoRec
+     * carries that id (MST children use NVKMS-internal ids from nvNewDpyId()),
+     * so the lookup returns NULL and falls through to the hwHead scan below.
+     */
+    NVDpyEvoRec *pDpyEvo = nvGetDpyEvoFromDispEvo(pDispEvo, id);
+
+    /*
+     * HDCP1X DP-MST fallback: the dynamic child displayId sent by RM is stored
+     * in headState[hwHead].activeRmId (set via nvRmAllocDisplayId at modeset).
+     * Scan all heads, find the one whose activeRmId matches, then resolve the
+     * parent connector's root NVDpyEvoRec via pConnectorEvo->displayId.
+     */
+    if (pDpyEvo == NULL) {
+        NvU32 hwHead;
+        nvEvoLogDisp(pDispEvo, EVO_LOG_INFO, "nvHandleCpEventDeferredWork: Cannot "
+            "find pDpyEvo for displayId: 0x%x\n", displayId);
+        for (hwHead = 0; hwHead < NVKMS_MAX_HEADS_PER_DISP; hwHead++) {
+            if (pDispEvo->headState[hwHead].activeRmId == displayId &&
+                pDispEvo->headState[hwHead].pConnectorEvo != NULL) {
+                id = pDispEvo->headState[hwHead].pConnectorEvo->displayId;
+                nvEvoLogDisp(pDispEvo, EVO_LOG_INFO, "nvHandleCpEventDeferredWork: Found "
+                    "root pDpyEvo with displayId: 0x%x\n", nvDpyIdToNvU32(id));
+                pDpyEvo = nvGetDpyEvoFromDispEvo(pDispEvo, id);
+                break;
+            }
+        }
+    }
+
+    if (pDpyEvo == NULL) {
+        nvEvoLogDisp(pDispEvo, EVO_LOG_WARN,
+             "nvHandleCpEventDeferredWork: displayId 0x%x invalid\n", displayId);
+        return;
+    }
+
+    if (hdcpStatusChangeNotif == hdcpStatusChangeNotif_EncEnabled) {
+        // This would query RM via RM Ctrl Call *_GET_HDCP_STATE to get hdcp state
+        // and then propogate the state upwards via nvkms and nvdrm event
+        nvSendDpyContentProtectionEventEvo(pDpyEvo,
+                                           (enum NvKmsContentProtection)0, /* cp (unused) */
+                                           NV_TRUE /* queryCp */);
+    }
+    else if (hdcpStatusChangeNotif == hdcpStatusChangeNotif_KsvOk ||
+             hdcpStatusChangeNotif == hdcpStatusChangeNotif_RepComplete) {
+        // This would query RM via RM Ctrl Call *HDCP_CTRL_CMD_READ_TOPOLOGY to 
+        // get topology and then propogate it upwards via nvkms and nvdrm event
+        nvSendDpyContentProtectionTopologyEventEvo(pDpyEvo, NV_FALSE /* clear */);
+    }
+    else if (hdcpStatusChangeNotif == hdcpStatusChangeNotif_HdcpDisabled ||
+             hdcpStatusChangeNotif == hdcpStatusChangeNotif_HdcpInactive ||
+             hdcpStatusChangeNotif == hdcpStatusChangeNotif_LinkFailed ||
+             hdcpStatusChangeNotif == hdcpStatusChangeNotif_HdcpRestart) {
+        // Here either the HDCP is disabled or being restarted by the RM hence we clear 
+        // the content protection state and topology. We don't query the RM via RM Ctrl Call
+        // as state of RM objects and variables would be in a state of flux as HDCP is being
+        // re-started. When RM is done with HDCP it will again send NVKMS appropriate event
+        // to refresh itself.
+        nvSendDpyContentProtectionEventEvo(pDpyEvo,
+                                           NVKMS_CONTENT_PROTECTION_OFF,
+                                           NV_FALSE /* queryCp */);
+        nvSendDpyContentProtectionTopologyEventEvo(pDpyEvo, NV_TRUE /* clear */);
+    }
+    else if (hdcpStatusChangeNotif == hdcpStatusChangeNotif_HdcpFailed) {
+        // When HDCP has failed we set the cp property to NVKMS_CONTENT_PROTECTION_FAILED and clear
+        // the topology. In case if HDCP Repeater, downstream HDCP failure must be explicitly conveyed
+        // to upstream.
+        nvSendDpyContentProtectionEventEvo(pDpyEvo,
+                                           NVKMS_CONTENT_PROTECTION_FAILED,
+                                           NV_FALSE /* queryCp */);
+        nvSendDpyContentProtectionTopologyEventEvo(pDpyEvo, NV_TRUE /* clear */);
+    }
+}
+

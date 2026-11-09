@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2006-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2006-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -1242,9 +1242,9 @@ void parseCta861HdrStaticMetadataDataBlock(NVT_EDID_CEA861_INFO *pExt861,
     {
         pHdrInfo->supported_eotf.smpte_st_2084_eotf = 1;
     }
-    if (pExt861->hdr_static_metadata.byte1 & NVT_CEA861_EOTF_FUTURE)
+    if (pExt861->hdr_static_metadata.byte1 & NVT_CEA861_EOTF_HLG)
     {
-        pHdrInfo->supported_eotf.future_eotf = 1;
+        pHdrInfo->supported_eotf.hybrid_log_gamma_eotf = 1;
     }
 
     // Parse the static metadata descriptor
@@ -3910,7 +3910,8 @@ void parseEdidHdmiForumVSDB(VSDB_DATA *pVsdb, NVT_HDMI_FORUM_INFO *pHdmiInfo)
             pHdmiInfo->dsc_MaxPclkPerSliceMHz = 0;
             switch(pHdmiForum->DSC_MaxSlices)
             {
-            case 7: pHdmiInfo->dsc_MaxSlices = 16; pHdmiInfo->dsc_MaxPclkPerSliceMHz = 400; break;
+            case 8: pHdmiInfo->dsc_MaxSlices = 12; pHdmiInfo->dsc_MaxPclkPerSliceMHz = 900; break;
+            case 7: pHdmiInfo->dsc_MaxSlices = 12; pHdmiInfo->dsc_MaxPclkPerSliceMHz = 600; break;
             case 6: pHdmiInfo->dsc_MaxSlices = 12; pHdmiInfo->dsc_MaxPclkPerSliceMHz = 400; break;
             case 5: pHdmiInfo->dsc_MaxSlices = 8;  pHdmiInfo->dsc_MaxPclkPerSliceMHz = 400; break;
             case 4: pHdmiInfo->dsc_MaxSlices = 8;  pHdmiInfo->dsc_MaxPclkPerSliceMHz = 340; break;

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2002-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2002-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -25,7 +25,6 @@
 #include "gpu/gpu.h"
 #include "nv_ref.h"
 #include "platform/chipset/chipset.h"
-#include "os/os.h"
 #include "core/system.h"
 #include "core/locks.h"
 #include "gpu/bif/kernel_bif.h"
@@ -37,7 +36,6 @@
 #include "gpu/device/device.h"
 #include "gpu/subdevice/subdevice.h"
 #include "gpu/subdevice/subdevice_diag.h"
-#include "platform/sli/sli.h"
 
 #include "ctrl/ctrl0080/ctrl0080host.h"
 #include "ctrl/ctrl2080/ctrl2080bus.h"
@@ -63,24 +61,16 @@ kbusControlGetCaps
 static NV_STATUS
 _kbusGetHostCaps(OBJGPU *pGpu, NvU8 *pHostCaps)
 {
-    NV_STATUS  status           = NV_OK;
-    NvBool     bCapsInitialized = NV_FALSE;
+    KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
 
-    SLI_LOOP_START(SLI_LOOP_FLAGS_BC_ONLY)
+    if (pKernelBus == NULL)
     {
-        KernelBus *pKernelBus = GPU_GET_KERNEL_BUS(pGpu);
-        if (pKernelBus == NULL)
-        {
-            status = NV_ERR_INVALID_POINTER;
-            SLI_LOOP_BREAK;
-        }
-
-        kbusGetDeviceCaps(pGpu, pKernelBus, pHostCaps, bCapsInitialized);
-        bCapsInitialized = NV_TRUE;
+        return NV_ERR_INVALID_POINTER;
     }
-    SLI_LOOP_END
 
-    return status;
+    kbusGetDeviceCaps(pGpu, pKernelBus, pHostCaps);
+
+    return NV_OK;
 }
 
 //
@@ -141,6 +131,58 @@ deviceCtrlCmdHostGetCapsV2_SOC
 //
 // BUS RM SubDevice Controls
 //
+static NV_STATUS
+_subdeviceCtrlCmdBusFillPciInfo
+(
+    OBJGPU *pGpu,
+    NvU32 *pPciDeviceId,
+    NvU32 *pPciSubSystemId,
+    NvU32 *pPciRevisionId,
+    NvU32 *pPciExtDeviceId
+)
+{
+    if (!gpuIsPciBusFamily(pGpu))
+    {
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    *pPciDeviceId = pGpu->idInfo.PCIDeviceID;
+    *pPciSubSystemId = pGpu->idInfo.PCISubDeviceID;
+    *pPciRevisionId = pGpu->idInfo.PCIRevisionID;
+
+    //
+    // Return device ID field.  We no longer support probing past the BR02 bridge.
+    //
+    *pPciExtDeviceId = REF_VAL(NV_CONFIG_PCI_NV_0_DEVICE_ID, *pPciDeviceId);
+
+    return NV_OK;
+}
+
+static NV_STATUS
+_subdeviceCtrlCmdBusFillPciClassInfo
+(
+    OBJGPU *pGpu,
+    NvU32 *pPciProgrammingInterface,
+    NvU32 *pPciSubClass,
+    NvU32 *pPciBaseClass
+)
+{
+    if (!gpuIsPciBusFamily(pGpu))
+    {
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    *pPciProgrammingInterface = pGpu->idInfo.PCIProgrammingInterface;
+    *pPciSubClass = pGpu->idInfo.PCISubClass;
+    *pPciBaseClass = pGpu->idInfo.PCIBaseClass;
+
+    return NV_OK;
+}
+
+//
+// GET_PCI_INFO is kept for v1 ABI compatibility. Do not add new PCI fields
+// here; use GET_PCI_INFO_V2 or a later versioned control instead.
+//
 NV_STATUS
 subdeviceCtrlCmdBusGetPciInfo_IMPL
 (
@@ -150,21 +192,37 @@ subdeviceCtrlCmdBusGetPciInfo_IMPL
 {
     OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
 
-    if (!gpuIsPciBusFamily(pGpu))
+    return _subdeviceCtrlCmdBusFillPciInfo(pGpu,
+                                           &pPciInfoParams->pciDeviceId,
+                                           &pPciInfoParams->pciSubSystemId,
+                                           &pPciInfoParams->pciRevisionId,
+                                           &pPciInfoParams->pciExtDeviceId);
+}
+
+NV_STATUS
+subdeviceCtrlCmdBusGetPciInfoV2_IMPL
+(
+    Subdevice *pSubdevice,
+    NV2080_CTRL_BUS_GET_PCI_INFO_V2_PARAMS *pPciInfoParams
+)
+{
+    NV_STATUS status;
+    OBJGPU *pGpu = GPU_RES_GET_GPU(pSubdevice);
+
+    status = _subdeviceCtrlCmdBusFillPciInfo(pGpu,
+                                             &pPciInfoParams->pciDeviceId,
+                                             &pPciInfoParams->pciSubSystemId,
+                                             &pPciInfoParams->pciRevisionId,
+                                             &pPciInfoParams->pciExtDeviceId);
+    if (status != NV_OK)
     {
-        return NV_ERR_NOT_SUPPORTED;
+        return status;
     }
 
-    pPciInfoParams->pciDeviceId = pGpu->idInfo.PCIDeviceID;
-    pPciInfoParams->pciSubSystemId = pGpu->idInfo.PCISubDeviceID;
-    pPciInfoParams->pciRevisionId = pGpu->idInfo.PCIRevisionID;
-
-    //
-    // Return device ID field.  We no longer support probing past the BR02 bridge.
-    //
-    pPciInfoParams->pciExtDeviceId = REF_VAL(NV_CONFIG_PCI_NV_0_DEVICE_ID, pPciInfoParams->pciDeviceId);
-
-    return NV_OK;
+    return _subdeviceCtrlCmdBusFillPciClassInfo(pGpu,
+                                                &pPciInfoParams->pciProgrammingInterface,
+                                                &pPciInfoParams->pciSubClass,
+                                                &pPciInfoParams->pciBaseClass);
 }
 
 NV_STATUS
@@ -279,8 +337,17 @@ getBusInfos(OBJGPU *pGpu, NV2080_CTRL_BUS_INFO *pBusInfos, NvU32 busInfoListSize
             {
                 if (gpuIsPciBusFamily(pGpu) && IS_VIRTUAL(pGpu))
                 {
-                    VGPU_STATIC_INFO *pVSI = GPU_GET_STATIC_INFO(pGpu);
-                    pBusInfos[i].data = pVSI->pcieGpuLinkCaps;
+                    /*
+                     * Prefer the guest-visible LinkCap for vGPU guests.
+                     * PCIe capability is exposed on certain vGPU configs.
+                     * Guests that do not expose a usable guest LinkCap retain
+                     * the RM-provided static vGPU LinkCap via the fallback.
+                     */
+                    pBusInfos[i].data = kbifGetGpuLinkCapabilities(pGpu, pKernelBif);
+                    if (pBusInfos[i].data == 0)
+                    {
+                        pBusInfos[i].data = GPU_GET_STATIC_INFO(pGpu)->pcieGpuLinkCaps;
+                    }
                     break;
                 }
             }
@@ -419,12 +486,14 @@ getBusInfos(OBJGPU *pGpu, NV2080_CTRL_BUS_INFO *pBusInfos, NvU32 busInfoListSize
             }
             case NV2080_CTRL_BUS_INFO_INDEX_GPU_GART_SIZE:
             {
-                pBusInfos[i].data = (NvU32)(kgmmuGetMaxVASize(pKernelGmmu) >> 20);
+                pBusInfos[i].data = (pKernelGmmu != NULL) ?
+                    (NvU32)(kgmmuGetMaxVASize(pKernelGmmu) >> 20) : 0;
                 break;
             }
             case NV2080_CTRL_BUS_INFO_INDEX_GPU_GART_SIZE_HI:
             {
-                pBusInfos[i].data = (NvU32)((kgmmuGetMaxVASize(pKernelGmmu) >> 20) >> 32);
+                pBusInfos[i].data = (pKernelGmmu != NULL) ?
+                    (NvU32)((kgmmuGetMaxVASize(pKernelGmmu) >> 20) >> 32) : 0;
                 break;
             }
             case NV2080_CTRL_BUS_INFO_INDEX_GPU_GART_FLAGS:
@@ -680,4 +749,3 @@ subdeviceCtrlCmdBusSetC2CIdleThreshold_VF
 {
     return NV_ERR_NOT_SUPPORTED;
 }
-

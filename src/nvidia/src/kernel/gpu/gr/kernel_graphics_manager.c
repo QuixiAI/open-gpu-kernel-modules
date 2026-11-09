@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -33,7 +33,7 @@
 
 #include "kernel/rmapi/client.h"
 #include "kernel/rmapi/client_resource.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 
 // COMPUTE
 #include "class/clb0c0.h"
@@ -511,7 +511,7 @@ kgrmgrCtrlRouteKGRWithDevice_IMPL
                 // If retrieving a channel with the given hChannel doesn't work,
                 // try interpreting it as a handle to a channel group instead.
                 //
-                status = CliGetChannelGroup(pClient->hClient, hChannel,
+                status = CliGetChannelGroup(pClient, hChannel,
                     &pChanGrpRef, NULL);
                 if (NV_OK != status)
                 {

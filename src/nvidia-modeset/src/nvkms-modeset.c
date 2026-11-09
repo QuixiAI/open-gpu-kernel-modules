@@ -113,8 +113,8 @@ AssignProposedHdmiFrlConfig(
 static NvBool
 GetColorFormatAndColorRange(
     const NVDispEvoRec *pDispEvo,
-    const NvU32 apiHead,
     const struct NvKmsSetModeOneHeadRequest *pRequestHead,
+    const enum NvYuv420Mode yuv420Mode,
     NVDpyAttributeColor *pDpyColor);
 
 static void DisableVBlankRgSemaphoreInterrupt(NVDispEvoPtr pDispEvo,
@@ -188,7 +188,6 @@ InheritPreviousModesetState(const NVDevEvoRec *pDevEvo,
  */
 NvBool
 nvGetHwModeTimings(const NVDispEvoRec *pDispEvo,
-                   const NvU32 apiHead,
                    const struct NvKmsSetModeOneHeadRequest *pRequestHead,
                    NVHwModeTimingsEvo *pTimings,
                    NVDpyAttributeColor *pDpyColor,
@@ -198,6 +197,12 @@ nvGetHwModeTimings(const NVDispEvoRec *pDispEvo,
 {
     NVDpyEvoPtr pDpyEvo;
     NVDpyAttributeColor dpyColor = { };
+    struct NvKmsMode kmsMode = pRequestHead->mode;
+    enum NvYuv420Mode yuv420Mode = NV_YUV420_MODE_NONE;
+    NvBool dscPassThrough = FALSE;
+    NvBool colorFormatSpecified =
+        (pRequestHead->colorFormatSpecified) &&
+        (pRequestHead->colorFormat != NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_UNKNOWN);
 
     if (nvDpyIdListIsEmpty(pRequestHead->dpyIdList)) {
         return TRUE;
@@ -209,22 +214,39 @@ nvGetHwModeTimings(const NVDispEvoRec *pDispEvo,
         return FALSE;
     }
 
-    if (!GetColorFormatAndColorRange(pDispEvo, apiHead, pRequestHead,
-                                    &dpyColor)) {
-        return FALSE;
-    }
-
     if (!nvValidateModeForModeset(pDpyEvo,
                                   &pRequestHead->modeValidationParams,
-                                  &pRequestHead->mode,
-                                  &pRequestHead->viewPortSizeIn,
-                                  pRequestHead->viewPortOutSpecified ?
-                                            &pRequestHead->viewPortOut : NULL,
-                                  &dpyColor,
-                                  pTimings,
+                                  &kmsMode,
+                                  pRequestHead->yuv420Mode.specified,
+                                  pRequestHead->yuv420Mode.val,
+                                  &yuv420Mode,
+                                  &dscPassThrough,
                                   pInfoFrameCtrl,
                                   pVSInfoFrameCtrl,
                                   pEmpInfoFrameCtrl)) {
+        return FALSE;
+    }
+
+    if (!GetColorFormatAndColorRange(pDispEvo, pRequestHead,
+                                     yuv420Mode, &dpyColor)) {
+        return FALSE;
+    }
+
+    nvkms_memset(pTimings, 0, sizeof(*pTimings));
+
+    if (!nvConstructHwModeTimingsEvo(pDpyEvo,
+                                     &kmsMode,
+                                     yuv420Mode,
+                                     &pRequestHead->viewPortSizeIn,
+                                     pRequestHead->viewPortOutSpecified ?
+                                           &pRequestHead->viewPortOut : NULL,
+                                     dscPassThrough,
+                                     colorFormatSpecified,
+                                     pRequestHead->colorBpcSpecified,
+                                     &dpyColor,
+                                     pTimings,
+                                     &pRequestHead->modeValidationParams,
+                                     &dummyInfoString)) {
         return FALSE;
     }
 
@@ -233,6 +255,22 @@ nvGetHwModeTimings(const NVDispEvoRec *pDispEvo,
     }
 
     return TRUE;
+}
+
+/*!
+ * Check that the set-mode request's YUV 4:2:0 sideband is consistent with the
+ * disposition resolved by nvGetHwModeTimings().
+ */
+static NvBool ValidateSetModeYuv420Mode(
+    const struct NvKmsSetModeOneHeadRequest *pRequestHead,
+    const NVHwModeTimingsEvo *pTimings)
+{
+    if (pRequestHead->yuv420Mode.specified) {
+        return pTimings->yuv420Mode == pRequestHead->yuv420Mode.val;
+    }
+
+    /* SW YUV420 requires an explicit client or HeadSurface commitment. */
+    return pTimings->yuv420Mode != NV_YUV420_MODE_SW;
 }
 
 static NvBool IsPreSyncptSpecified(
@@ -257,29 +295,34 @@ static NvBool IsPreSyncptSpecified(
 static NvBool
 GetColorFormatAndColorRange(
     const NVDispEvoRec *pDispEvo,
-    const NvU32 apiHead,
     const struct NvKmsSetModeOneHeadRequest *pRequestHead,
+    const enum NvYuv420Mode yuv420Mode,
     NVDpyAttributeColor *pDpyColor)
 {
-    enum NvKmsOutputColorimetry colorimetry;
+    enum NvKmsOutputColorimetry colorimetry = NVKMS_OUTPUT_COLORIMETRY_DEFAULT;
     enum NvKmsDpyAttributeColorRangeValue requestedColorRange;
     enum NvKmsDpyAttributeColorBpcValue requestedColorBpc;
     enum NvKmsDpyAttributeRequestedColorFormatValue requestedColorFormat;
     NVDpyEvoRec *pOneArbitraryDpyEvo =
         nvGetOneArbitraryDpyEvo(pRequestHead->dpyIdList, pDispEvo);
+    NvBool ret;
+    NvU32 i;
 
     if (pRequestHead->colorFormatSpecified) {
         const NVDpyEvoRec *pDpyEvo;
 
-        /*
-         * There could be multiple DPYs driven by this head. For each DPY,
-         * validate that the requested color format and color range is valid.
-         */
-        FOR_ALL_EVO_DPYS(pDpyEvo, pRequestHead->dpyIdList, pDispEvo) {
-            if (!nvDpyValidateColorFormat(pDpyEvo, pRequestHead->colorFormat)) {
-                return FALSE;
+        if (pRequestHead->colorFormat !=
+            NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_UNKNOWN) {
+            /*
+             * There could be multiple DPYs driven by this head. For each DPY,
+             * validate that the requested color format and color range is valid.
+             */
+            FOR_ALL_EVO_DPYS(pDpyEvo, pRequestHead->dpyIdList, pDispEvo) {
+                if (!nvDpyValidateColorFormat(pDpyEvo, pRequestHead->colorFormat)) {
+                    return FALSE;
+                }
             }
-        }
+        } 
 
         requestedColorFormat = pRequestHead->colorFormat;
     } else {
@@ -298,12 +341,16 @@ GetColorFormatAndColorRange(
         requestedColorBpc = NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN;
     }
 
+    /*
+     * Colorimetry is rebuilt as part of the modeset color state. Do not
+     * implicitly inherit it from the previous apiHeadState; clients that need
+     * a non-default colorimetry across a modeset must specify it.
+     */
     if (pRequestHead->flip.colorimetry.specified) {
         colorimetry = pRequestHead->flip.colorimetry.val;
-    } else {
-        colorimetry =
-            pDispEvo->apiHeadState[apiHead].attributes.color.colorimetry;
     }
+
+    pDpyColor->colorimetry = colorimetry;
 
     /* Update requested dithering state for all dpys on this head */
     if (pRequestHead->flip.dithering.specified) {
@@ -319,56 +366,57 @@ GetColorFormatAndColorRange(
      * Choose current color format and colorRange based on the current mode
      * timings and the requested color format and range.
      */
-    if (!nvChooseCurrentColorFormatAndRangeEvo(pOneArbitraryDpyEvo,
-                                              pRequestHead->mode.timings.yuv420Mode,
-                                              colorimetry,
-                                              requestedColorFormat,
-                                              requestedColorBpc,
-                                              requestedColorRange,
-                                              &pDpyColor->format,
-                                              &pDpyColor->bpc,
-                                              &pDpyColor->range)) {
-        return FALSE;
-    }
-    pDpyColor->colorimetry = colorimetry;
+    for (i = 0; i < 2; i++) {
+        ret = nvChooseCurrentColorFormatAndRangeEvo(pOneArbitraryDpyEvo,
+                                                    yuv420Mode,
+                                                    colorimetry,
+                                                    requestedColorFormat,
+                                                    requestedColorBpc,
+                                                    requestedColorRange,
+                                                    &pDpyColor->format,
+                                                    &pDpyColor->bpc,
+                                                    &pDpyColor->range);
+        if (ret) {
+            break;
+        }
 
-    return TRUE;
+        /*
+         * When the color format is not specified, the selection could fail 
+         * due to the selected dpy attribute. In this case, we should prioritize
+         * a successful modeset, so retry with an UNKNOWN requested format.
+         */ 
+        if (!pRequestHead->colorFormatSpecified) {
+            requestedColorFormat = NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_UNKNOWN;
+        }
+    }
+
+    return ret;
 }
 
 static NvBool AssignProposedModeSetColorFormatAndColorRangeSpecified(
     const struct NvKmsSetModeOneHeadRequest *pRequestHead,
     NVProposedModeSetStateOneApiHead *pProposedApiHead)
 {
+    NvBool colorFormatSpecified =
+        pRequestHead->colorFormatSpecified &&
+        (pRequestHead->colorFormat != NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_UNKNOWN);
     /*
      * When color format is specified in modeset request, it should
      * match the proposed color format.
      */
-    if (pRequestHead->colorFormatSpecified) {
-        NvBool ret = FALSE;
-        switch (pProposedApiHead->attributes.color.format) {
-            case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_FORMAT_RGB:
-                ret = (pRequestHead->colorFormat ==
-                        NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_RGB);
-                break;
-            case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_FORMAT_YCbCr422:
-                ret = (pRequestHead->colorFormat ==
-                        NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_YCbCr422);
-                break;
-            case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_FORMAT_YCbCr444:
-                ret = (pRequestHead->colorFormat ==
-                        NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_YCbCr444);
-                break;
-            default:
-                break;
-        }
-        if (!ret) {
-            return ret;
+    if (colorFormatSpecified) {
+        // TODO: Make this an assert?
+        if (nvGetCurrentColorFormatFromRequested(pRequestHead->colorFormat) !=
+            pProposedApiHead->attributes.color.format) {
+
+            return FALSE;
         }
     }
 
     /*
      * When color bpc is specified in modeset request, it should
      * match the proposed color bpc.
+     * TODO: Make this an assert?
      */
     if (pRequestHead->colorBpcSpecified &&
         (pProposedApiHead->attributes.color.bpc != pRequestHead->colorBpc)) {
@@ -384,35 +432,62 @@ static NvBool AssignProposedModeSetColorFormatAndColorRangeSpecified(
         return FALSE;
     }
 
-    pProposedApiHead->colorFormatSpecified = pRequestHead->colorFormatSpecified;
+    pProposedApiHead->colorFormatSpecified = colorFormatSpecified;
     pProposedApiHead->colorBpcSpecified = pRequestHead->colorBpcSpecified;
     pProposedApiHead->colorRangeSpecified = pRequestHead->colorRangeSpecified;
     return TRUE;
 }
 
-static void AdjustHwModeTimingsForVrr(const NVDispEvoRec *pDispEvo,
+static NvBool AdjustHwModeTimingsForVrr(const NVDispEvoRec *pDispEvo,
     const struct NvKmsSetModeOneHeadRequest *pRequestHead,
     NVHwModeTimingsEvo *pTimings)
 {
+    const NVDevEvoRec *pDevEvo = pDispEvo->pDevEvo;
     NVDpyEvoPtr pDpyEvo =
         nvGetOneArbitraryDpyEvo(pRequestHead->dpyIdList, pDispEvo);
+
     if (pDpyEvo == NULL) {
-        return;
+        return TRUE;
     }
 
     const NvBool allowGsync = pRequestHead->allowGsync;
     const NvU32 vrrOverrideMinRefreshRate = pRequestHead->vrrOverrideMinRefreshRate;
-    const enum NvKmsDpyVRRType vrrType =
+    const enum NvKmsDpyVRRType dpyVrrType =
         nvGetAllowedDpyVrrType(pDpyEvo,
                                &pRequestHead->mode.timings,
                                pRequestHead->modeValidationParams.stereoMode,
                                allowGsync,
                                pRequestHead->allowAdaptiveSync);
 
+    if (dpyVrrType == NVKMS_DPY_VRR_TYPE_NONE) {
+        return TRUE;
+    }
+
+    /* Media-VRR requires HW support for virtual refresh rate */
+    if ((pRequestHead->vrrType == NVKMS_REQUESTED_VRR_TYPE_MEDIA) &&
+        !pDevEvo->caps.supportsVirtualRefreshRate) {
+        
+        return FALSE;
+    } 
+
+    if (pRequestHead->vrrType == NVKMS_REQUESTED_VRR_TYPE_MEDIA) {
+        #define MILLION 1000000ULL 
+        /*
+         * The calculations for Media-VRR require that the timings are sane. Reject
+         * a Media-VRR mode if not. We should not reach this case for any mode advertised
+         * by a real display, only custom modetimings.
+         */ 
+        if (((pTimings->rasterSize.x == 0) || (pTimings->rasterSize.y == 0)) ||
+            ((pTimings->pixelClockHz == 0) || (pTimings->pixelClockHz >= MILLION * MILLION))) {
+            return FALSE;
+        }
+    }
+
     nvAdjustHwModeTimingsForVrrEvo(pDpyEvo,
-                                   vrrType,
+                                   pRequestHead->vrrType,
                                    vrrOverrideMinRefreshRate,
                                    pTimings);
+    return TRUE;
 }
 
 /*
@@ -472,6 +547,12 @@ InitNVProposedModeSetStateOneApiHead(
         pDispEvo->apiHeadState[apiHead].hdrStaticMetadataLayerMask;
     pProposedApiHead->viewPortPointIn =
         pDispEvo->apiHeadState[apiHead].viewPortPointIn;
+    pProposedApiHead->postcompColorPassthrough =
+        pDispEvo->apiHeadState[apiHead].postcompColorPassthrough;
+    pProposedApiHead->hdmiVsifMetadataEnabled =
+        pDispEvo->apiHeadState[apiHead].hdmiVsifMetadataEnabled;
+    pProposedApiHead->allmMode =
+        pDispEvo->apiHeadState[apiHead].allmMode;
 
     NvU32 head;
     NvU32 hwHeadCount = 0;
@@ -517,6 +598,7 @@ InitProposedModeSetHwState(const NVDevEvoRec *pDevEvo,
                 NVFlipEvoHwState *pFlip = &pProposed->sd[sd].head[head].flip;
                 pFlip->dirty.tf = TRUE;
                 pFlip->dirty.hdrStaticMetadata = TRUE;
+                pFlip->dirty.hdmiVsifMetadata = TRUE;
                 for (layer = 0; layer < pDevEvo->head[head].numLayers; layer++) {
                     pFlip->dirty.layer[layer] = TRUE;
                 }
@@ -595,6 +677,8 @@ AssignProposedModeSetNVFlipEvoHwState(
         pFlip->dirty.tf = TRUE;
         pFlip->dirty.hdrStaticMetadata = TRUE;
         pFlip->dirty.olut = TRUE;
+        pFlip->dirty.postcompColorPassthrough = TRUE;
+        pFlip->dirty.hdmiVsifMetadata = TRUE;
 
         for (layer = 0; layer < pDevEvo->head[head].numLayers; layer++) {
             pFlip->dirty.layer[layer] = TRUE;
@@ -1091,13 +1175,20 @@ AssignProposedModeSetHwState(NVDevEvoRec *pDevEvo,
              * more complete failure information to the client.
              */
             if (!nvGetHwModeTimings(pDispEvo,
-                                    apiHead,
                                     pRequestHead,
                                     &pProposedApiHead->timings,
                                     &pProposedApiHead->attributes.color,
                                     &pProposedApiHead->infoFrame.ctrl,
                                     &pProposedApiHead->infoFrame.vendorSpecificCtrl,
                                     &pProposedApiHead->infoFrame.empCtrl)) {
+                pReply->disp[sd].head[apiHead].status =
+                    NVKMS_SET_MODE_ONE_HEAD_STATUS_INVALID_MODE;
+                ret = FALSE;
+                continue;
+            }
+
+            if (!ValidateSetModeYuv420Mode(pRequestHead,
+                                           &pProposedApiHead->timings)) {
                 pReply->disp[sd].head[apiHead].status =
                     NVKMS_SET_MODE_ONE_HEAD_STATUS_INVALID_MODE;
                 ret = FALSE;
@@ -1112,9 +1203,14 @@ AssignProposedModeSetHwState(NVDevEvoRec *pDevEvo,
                 continue;
             }
 
-            AdjustHwModeTimingsForVrr(pDispEvo,
-                                      pRequestHead,
-                                      &pProposedApiHead->timings);
+            if (!AdjustHwModeTimingsForVrr(pDispEvo,
+                                           pRequestHead,
+                                           &pProposedApiHead->timings)) {
+                pReply->disp[sd].head[apiHead].status =
+                    NVKMS_SET_MODE_ONE_HEAD_STATUS_INVALID_MODE;
+                ret = FALSE;
+                continue;
+            }
 
             pProposedApiHead->stereo.mode =
                 pRequestHead->modeValidationParams.stereoMode;
@@ -1168,15 +1264,6 @@ AssignProposedModeSetHwState(NVDevEvoRec *pDevEvo,
                 // If enabling HDR TF...
                 // XXX HDR TODO: Handle other transfer functions
                 if (pProposedApiHead->tf == NVKMS_OUTPUT_TF_PQ) {
-                    // Cannot be an SLI configuration.
-                    // XXX HDR TODO: Test SLI Mosaic + HDR and remove this check
-                    if (pDevEvo->numSubDevices > 1) {
-                        ret = FALSE;
-                        pReply->disp[sd].head[apiHead].status =
-                            NVKMS_SET_MODE_ONE_HEAD_STATUS_INVALID_FLIP;
-                        continue;
-                    }
-
                     /* NVKMS_OUTPUT_TF_PQ requires the RGB color format */
                     if (pProposedApiHead->attributes.color.format !=
                             NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_FORMAT_RGB) {
@@ -1191,6 +1278,40 @@ AssignProposedModeSetHwState(NVDevEvoRec *pDevEvo,
             if (pRequestHead->flip.hdrInfoFrame.specified) {
                 pProposedApiHead->hdrInfoFrameOverride =
                     pRequestHead->flip.hdrInfoFrame.enabled;
+            }
+
+            if (pRequestHead->flip.hdmiVsifMetadata.specified) {
+                pProposedApiHead->hdmiVsifMetadataEnabled =
+                    pRequestHead->flip.hdmiVsifMetadata.vsifMetadata.payloadSize != 0;
+            }
+
+            if (pRequestHead->flip.allmMode.specified) {
+                if (pRequestHead->flip.allmMode.mode >
+                    NVKMS_ALLM_MODE_ENABLED_FORCED) {
+                    ret = FALSE;
+                    pReply->disp[sd].head[apiHead].status =
+                        NVKMS_SET_MODE_ONE_HEAD_STATUS_INVALID_FLIP;
+                    continue;
+                }
+
+                if (pRequestHead->flip.allmMode.mode != NVKMS_ALLM_MODE_DISABLED) {
+                    const NVDpyEvoRec *pDpyEvo;
+                    FOR_ALL_EVO_DPYS(pDpyEvo,
+                                     pProposedApiHead->dpyIdList,
+                                     pDispEvo) {
+                        if (!pDpyEvo->allmCapable) {
+                            ret = FALSE;
+                            pReply->disp[sd].head[apiHead].status =
+                                NVKMS_SET_MODE_ONE_HEAD_STATUS_INVALID_FLIP;
+                            break;
+                        }
+                    }
+                    if (ret == FALSE) {
+                        continue;
+                    }
+                }
+                pProposedApiHead->allmMode =
+                    pRequestHead->flip.allmMode.mode;
             }
 
             for (layer = 0; layer < pDevEvo->apiHead[apiHead].numLayers; layer++) {
@@ -1233,6 +1354,12 @@ AssignProposedModeSetHwState(NVDevEvoRec *pDevEvo,
             if (pRequestHead->flip.viewPortIn.specified) {
                 pProposedApiHead->viewPortPointIn =
                     pRequestHead->flip.viewPortIn.point;
+            }
+
+            /* Propagate the postcomp passthrough mode to the API head. */
+            if (pRequestHead->flip.postcompColorPassthrough.specified) {
+                pProposedApiHead->postcompColorPassthrough =
+                    pRequestHead->flip.postcompColorPassthrough.enabled;
             }
         } /* apiHead */
 
@@ -1567,22 +1694,11 @@ static NvBool DowngradeColorFormatAndBpcOneHead(
     const NvKmsDpyOutputColorFormatInfo supportedColorFormats =
         nvDpyGetOutputColorFormatInfo(pDpyEvo);
 
-    if (!nvDowngradeColorFormatAndBpc(pDpyEvo, &supportedColorFormats, &dpyColor)) {
-        return FALSE;
-    }
-
-    if (pProposedApiHead->colorRangeSpecified &&
-        (dpyColor.range != pProposedApiHead->attributes.color.range)) {
-        return FALSE;
-    }
-
-    if (pProposedApiHead->colorBpcSpecified &&
-        (dpyColor.bpc != pProposedApiHead->attributes.color.bpc)) {
-        return FALSE;
-    }
-
-    if (pProposedApiHead->colorFormatSpecified &&
-        (dpyColor.format != pProposedApiHead->attributes.color.format)) {
+    if (!nvDowngradeColorFormatAndBpc(pDpyEvo,
+                                      &supportedColorFormats,
+                                      pProposedApiHead->colorFormatSpecified,
+                                      pProposedApiHead->colorBpcSpecified,
+                                      &dpyColor)) {
         return FALSE;
     }
 
@@ -1723,13 +1839,14 @@ static NvBool DowngradeColorFormatAndBpcOneConnectorEvo(
 static NvBool AssignProposedHdmiFrlConfig(
     NVProposedModeSetStateOneApiHead *pProposedApiHead,
     NVProposedModeSetHwStateOneHead *pProposedPrimaryHead,
-    const struct NvKmsSetModeOneHeadRequest *pRequestHead, 
+    const struct NvKmsSetModeOneHeadRequest *pRequestHead,
     const NVDispEvoRec *pDispEvo,
     const NVDpyEvoRec *pDpyEvo)
 {
-    do {  
+    do {
         if (nvHdmiFrlQueryConfigOneColorFormatAndBpc(pDpyEvo,
                                                     &pRequestHead->mode.timings,
+                                                    pProposedApiHead->timings.yuv420Mode,
                                                     &pProposedApiHead->timings,
                                                     &pProposedApiHead->attributes.color,
                                                     (nvPopCount32(pProposedApiHead->hwHeadsMask) > 1)
@@ -1738,7 +1855,7 @@ static NvBool AssignProposedHdmiFrlConfig(
                                                     &pProposedPrimaryHead->hdmiFrlConfig,
                                                     &pProposedApiHead->dscInfo)) {
             return TRUE;
-        } 
+        }
 
     } while (DowngradeColorFormatAndBpcOneHead(pDispEvo, pProposedApiHead));
 
@@ -2066,9 +2183,8 @@ ValidateProposedModeSetHwStateOneDisp(
             &pProposedDisp->apiHead[apiHead];
 
         FOR_EACH_EVO_HW_HEAD_IN_MASK(pProposedApiHead->hwHeadsMask, head) {
-            /* XXX assume the gpus have equal capabilities */
             const NVEvoScalerCaps *pScalerCaps =
-                &pDevEvo->gpus[0].capabilities.head[head].scalerCaps;
+                &pDevEvo->capabilities.head[head].scalerCaps;
             const NVHwModeTimingsEvoPtr pTimings = &pProposedDisp->head[head].timings;
 
             if (!nvValidateHwModeTimingsViewPort(pDevEvo, pScalerCaps, pTimings,
@@ -2170,6 +2286,7 @@ ValidateProposedFlipHwStateOneSubDev(
             if (!nvValidateFlipEvoHwState(pDevEvo,
                                           head,
                                           &pProposedDisp->head[head].timings,
+                                          pProposedDisp->head[head].pConnectorEvo,
                                           &pProposedSd->head[head].flip)) {
                 pReplyDisp->head[apiHead].status =
                     NVKMS_SET_MODE_ONE_HEAD_STATUS_INVALID_FLIP;
@@ -2601,6 +2718,7 @@ ApplyProposedModeSetHwStateOneHeadShutDown(
     pHeadState->pConnectorEvo = NULL;
 
     pHeadState->bypassComposition = FALSE;
+    pHeadState->postcompColorPassthrough = FALSE;
     pHeadState->mergeHeadSection = 0;
     nvkms_memset(&pHeadState->timings, 0, sizeof(pHeadState->timings));
     pHeadState->activeRmId = 0;
@@ -2772,6 +2890,11 @@ ApplyProposedModeSetStateOneDispFlip(
 
         nvAssert(pDpyEvo != NULL);
 
+        nvUpdateCoreFid(
+            pDispEvo,
+            apiHead,
+            pUpdateState);
+
         FOR_EACH_EVO_HW_HEAD_IN_MASK(pProposedApiHead->hwHeadsMask, head) {
             nvSetUsageBoundsEvo(pDevEvo, sd, head,
                                 &pProposed->sd[sd].head[head].flip.usage,
@@ -2800,6 +2923,15 @@ ApplyProposedModeSetStateOneDispFlip(
 
         pDispEvo->apiHeadState[apiHead].viewPortPointIn =
             pProposedApiHead->viewPortPointIn;
+
+        pDispEvo->apiHeadState[apiHead].postcompColorPassthrough =
+            pProposedApiHead->postcompColorPassthrough;
+
+        pDispEvo->apiHeadState[apiHead].hdmiVsifMetadataEnabled =
+            pProposedApiHead->hdmiVsifMetadataEnabled;
+
+        pDispEvo->apiHeadState[apiHead].allmMode =
+            pProposedApiHead->allmMode;
     }
 }
 
@@ -2843,6 +2975,8 @@ ApplyProposedModeSetHwStateOneHeadPreUpdate(
     NVEvoUpdateState *updateState = &pModesetUpdateState->updateState;
 
     pHeadState->bypassComposition = bypassComposition;
+    pHeadState->postcompColorPassthrough =
+        pProposedApiHead->postcompColorPassthrough;
     pHeadState->activeRmId = pProposedApiHead->activeRmId;
     pHeadState->pConnectorEvo = pProposedHead->pConnectorEvo;
     pHeadState->mergeHeadSection = pProposedHead->mergeHeadSection;
@@ -2931,7 +3065,7 @@ static void CalculateRgTriggerToActiveLineOffset(NVDispEvoPtr pDispEvo,
      * during modeset (after timing validation) or registration (when head
      * is active with valid timing).
      */
-    nvAssert(pTimings->pixelClock != 0 && pTimings->rasterSize.x != 0);
+    nvAssert(pTimings->pixelClockHz != 0 && pTimings->rasterSize.x != 0);
 
     /* rgTriggerLine must be in blanking region. */
     nvAssert(rgTriggerLine <= pTimings->rasterBlankEnd.y ||
@@ -2954,13 +3088,13 @@ static void CalculateRgTriggerToActiveLineOffset(NVDispEvoPtr pDispEvo,
      * which fits easily in NvU64 (max ~18 quintillion).
      *
      * Precision: Integer division truncation is sub-nanosecond per line.
-     * Example for 8K@60Hz (rasterSize.x=8200, pixelClock=2376000 kHz):
+     * Example for 8K@60Hz (rasterSize.x=8200, pixelClock=2376000000 Hz):
      * 8200 * 1e9 / 2.376e9 = 3451.178 ns, truncated to 3451 ns (error
      * ~0.18 ns/line). Accumulated over vertical blanking lines (~45-180),
      * total error is tens of nanoseconds - negligible for vblank timestamp
      * purposes.
      */
-    lineTimeNs = ((NvU64)pTimings->rasterSize.x * 1000000000ULL) / KHzToHz(pTimings->pixelClock);
+    lineTimeNs = ((NvU64)pTimings->rasterSize.x * 1000000000ULL) / pTimings->pixelClockHz;
 
     // Calculate total offset in nanoseconds
     pApiHeadState->rgSemaInfo.triggerToActiveOffsetNs = (NvU64)linesToFirstActive * lineTimeNs;
@@ -3257,6 +3391,8 @@ ApplyProposedModeSetStateOneApiHeadPreUpdate(
     pApiHeadState->hdrStaticMetadataLayerMask =
         pProposedApiHead->hdrStaticMetadataLayerMask;
     pApiHeadState->hs10bpcHint = pProposedApiHead->hs10bpcHint;
+    pApiHeadState->postcompColorPassthrough =
+        pProposedApiHead->postcompColorPassthrough;
 
     if (nvPopCount32(pProposedApiHead->hwHeadsMask) > 1) {
         nvEvoEnableMergeModePreModeset(pDispEvo,
@@ -3284,7 +3420,9 @@ ApplyProposedModeSetStateOneApiHeadPostModesetUpdate(
 {
     NvU32 head;
     NVDpyEvoRec *pDpyEvo;
+    NVDevEvoRec *pDevEvo = pDispEvo->pDevEvo;
     NVDispApiHeadStateEvoRec *pApiHeadState = &pDispEvo->apiHeadState[apiHead];
+    NvBool flipSynchronizeInfoframes = pDevEvo->supportsFlipSynchronizedInfoframes;
 
     /*
      * If nothing changed about this head's configuration, then there
@@ -3307,7 +3445,7 @@ ApplyProposedModeSetStateOneApiHeadPostModesetUpdate(
     pDpyEvo = nvGetOneArbitraryDpyEvo(pApiHeadState->activeDpys, pDispEvo);
     nvAssert(pDpyEvo != NULL);
 
-    nvUpdateInfoFrames(pDpyEvo);
+    nvUpdateInfoFrames(pDpyEvo, flipSynchronizeInfoframes);
 
     /* Perform 3D vision authentication */
     nv3DVisionAuthenticationEvo(pDispEvo, apiHead);
@@ -3547,6 +3685,8 @@ KickoffProposedModeSetHwState(
                 &updateState);
         }
 
+        nvEnableVrr(pDispEvo, &updateState);
+
         if (!nvIsUpdateStateEmpty(pDevEvo, &updateState)) {
             pDevEvo->hal->Update(pDevEvo, &updateState,
                                  TRUE /* releaseElv */);
@@ -3621,6 +3761,8 @@ ApplyProposedModeSetHwStateOneDisp(
 
     nvkms_memset(&pWorkArea->modesetUpdateState, 0,
                  sizeof(pWorkArea->modesetUpdateState));
+
+    nvDisableVrr(pDispEvo, &pWorkArea->modesetUpdateState.updateState);
 
     /* Record the current flip state. */
     for (head = 0; head < NVKMS_MAX_HEADS_PER_DISP; head++) {
@@ -4007,7 +4149,7 @@ AssignReplySuccess(NVDevEvoRec *pDevEvo,
                     (pDispEvo->pHsChannel[apiHead] != NULL);
                 pReplyHead->vrrEnabled =
                     (pApiHeadState->timings.vrr.type !=
-                     NVKMS_DPY_VRR_TYPE_NONE);
+                     NVKMS_VRR_TYPE_NONE);
                 pReplyHead->hwHead = primaryHwHead;
 
                 FillPostSyncptReplyForModeset(
@@ -4288,8 +4430,6 @@ NvBool nvSetDispModeEvo(NVDevEvoPtr pDevEvo,
 
     nvEvoRemoveOverlappingFlipLockRequestGroupsForModeset(pDevEvo, pRequest);
 
-    nvDisableVrr(pDevEvo);
-
     updateCoreFirst = pDevEvo->coreInitMethodsPending;
     pDevEvo->coreInitMethodsPending = FALSE;
 
@@ -4301,8 +4441,6 @@ NvBool nvSetDispModeEvo(NVDevEvoPtr pDevEvo,
                                            updateCoreFirst,
                                            bypassComposition);
     }
-
-    nvEnableVrr(pDevEvo);
 
     /*
      * Cache whether HS in NVKMS is allowed, so we can make consistent
@@ -4674,4 +4812,3 @@ void nvApiHeadGetScanLine(const NVDispEvoRec *pDispEvo,
     pDispEvo->pDevEvo->hal->GetScanLine(pDispEvo, head, pScanLine,
                                         pInBlankingPeriod);
 }
-

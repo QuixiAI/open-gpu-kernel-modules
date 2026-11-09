@@ -43,6 +43,7 @@ const struct NVOC_CLASS_DEF __nvoc_class_def_OBJHYPERVISOR =
 {
     .classInfo.size =               sizeof(OBJHYPERVISOR),
     .classInfo.classId =            classId(OBJHYPERVISOR),
+    .classInfo.visibility =         NVOC_EVENT_VISIBILITY_NONEVENT,
     .classInfo.providerId =         &__nvoc_rtti_provider,
 #if NV_PRINTF_STRINGS_ALLOWED
     .classInfo.name =               "OBJHYPERVISOR",
@@ -97,6 +98,7 @@ void __nvoc_dtor_OBJHYPERVISOR(Dynamic* pThis) {
 }
 void __nvoc_init_dataField_OBJHYPERVISOR(OBJHYPERVISOR *pThis) {
     PORT_UNREFERENCED_VARIABLE(pThis);
+    pThis->setProperty(pThis, PDB_PROP_HYPERVISOR_HYPERV_L1VH_ENABLED, NV_FALSE);
 }
 
 

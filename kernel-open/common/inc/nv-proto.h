@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1999-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1999-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -44,11 +44,12 @@ extern nv_pm_action_depth_t nv_procfs_pm_action_depth;
 
 int         nvidia_mmap                 (struct file *, struct vm_area_struct *);
 int         nvidia_mmap_helper          (nv_state_t *, nv_linux_file_private_t *, nvidia_stack_t *, struct vm_area_struct *, void *);
-int         nv_encode_caching           (pgprot_t *, NvU32, nv_memory_type_t);
+pgprot_t    nv_encode_caching           (pgprot_t, NvU32);
 void        nv_revoke_gpu_mappings_locked(nv_state_t *);
 
 NvUPtr      nv_vm_map_pages             (struct page **, NvU32, NvBool, NvBool);
 void        nv_vm_unmap_pages           (NvUPtr, NvU32);
+NvU64       nv_get_reclaimable_memory_usage(void);
 
 NV_STATUS   nv_alloc_contig_pages       (nv_state_t *, nv_alloc_t *);
 void        nv_free_contig_pages        (nv_alloc_t *);
@@ -85,7 +86,10 @@ void          nvidia_modeset_remove            (NvU32 gpuId);
 void          nvidia_modeset_probe             (const nv_linux_state_t *nvl);
 NvBool        nv_is_uuid_in_gpu_exclusion_list (const char *);
 
-NV_STATUS     nv_parse_per_device_option_string(nvidia_stack_t *sp);
+NV_STATUS     nv_parse_per_device_option_string(nvidia_stack_t *sp,
+                                                nv_state_t *current_nv);
+NV_STATUS     nv_parse_per_device_binary_option_string(nvidia_stack_t *sp,
+                                                       nv_state_t *current_nv);
 void          nv_enable_cdmm_mode(nvidia_stack_t *sp);
 NvBool        nv_is_galaxy_workstation         (void);
 
@@ -104,6 +108,7 @@ NvBool        nv_acpi_power_resource_method_present(struct pci_dev *);
 int           nv_linux_init_open_q(nv_linux_state_t *);
 void          nv_linux_stop_open_q(nv_linux_state_t *);
 
+void          nv_set_init_on_probe(nv_state_t *nv);
 int           nv_start_device(nv_state_t *nv, nvidia_stack_t *sp);
 void          nv_stop_device(nv_state_t *nv, nvidia_stack_t *sp);
 #endif /* _NV_PROTO_H_ */

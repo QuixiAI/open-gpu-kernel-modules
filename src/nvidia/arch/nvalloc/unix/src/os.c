@@ -65,6 +65,7 @@
 #include "mem_mgr/mem.h"
 #include "gpu/mem_mgr/virt_mem_allocator_common.h"
 #include "nvrm_registry.h"
+#include "nv-reg.h"
 
 #include "vgpu/vgpu_util.h"
 
@@ -72,14 +73,12 @@
 
 #include <acpidsmguids.h>
 #include <pex.h>
-#include "gps.h"
 #include "jt.h"
 
 
 
 
 extern const char *ppOsBugCheckBugcodeStr[];
-
 
 ct_assert(NV_RM_PAGE_SIZE == RM_PAGE_SIZE);
 ct_assert(NV_RM_PAGE_MASK == RM_PAGE_MASK);
@@ -398,14 +397,14 @@ static NV_STATUS setNumaPrivData
         {
             NvU64 size = pMemDesc->ActualSize;
             //
-            // Because of PMA case, we need to convert page array 
+            // Because of PMA case, we need to convert page array
             // from RM native granularity to OS granularity.
             //
             convertPageArrayBetweenOsAndRm(
-                addrArray, 
-                size / pMemDesc->pageArrayGranularity, 
+                addrArray,
+                size / pMemDesc->pageArrayGranularity,
                 pMemDesc->pageArrayGranularity,
-                size / os_page_size, 
+                size / os_page_size,
                 os_page_size,
                 &numOsPages
             );
@@ -487,6 +486,50 @@ NV_STATUS osGetMemoryPages
     return nv_get_phys_pages(pAllocPrivate, pPages, pNumPages);
 }
 
+static NV_STATUS
+_osAddMappingContext
+(
+    nv_alloc_mapping_context_t *pNvamc,
+    NvU64 *pOffset
+)
+{
+    nv_file_private_t *nvfp = tlsEntryGet(TLS_ENTRY_ID_FILE_PRIVATE);
+    nv_alloc_mapping_list_node_t **pfile_mapping_list = NULL;
+    nv_alloc_mapping_list_node_t *pNode = NULL;
+    NV_STATUS status = NV_OK;
+
+    if (nvfp == NULL)
+    {
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    NV_ASSERT_OK_OR_RETURN(os_alloc_mem((void**) &pNode, sizeof(nv_alloc_mapping_list_node_t)));
+    portMemSet(pNode, 0, sizeof(nv_alloc_mapping_list_node_t));
+    pNode->context = *pNvamc;
+
+    pfile_mapping_list = nv_acquire_file_va(nvfp, NV_TRUE);
+
+    if (*pfile_mapping_list != NULL)
+    {
+        status = NV_ERR_STATE_IN_USE;
+    }
+    else 
+    {
+        *pfile_mapping_list = pNode;
+    }
+
+    nv_release_file_va(nvfp, NV_TRUE);
+
+    if (status != NV_OK)
+    {
+        os_free_mem(pNode);
+    }
+
+    *pOffset = 0;
+
+    return status;
+}
+
 NV_STATUS osMapSystemMemory
 (
     MEMORY_DESCRIPTOR *pMemDesc,
@@ -561,19 +604,33 @@ NV_STATUS osMapSystemMemory
     }
     else
     {
-        rmStatus = nv_alloc_user_mapping(nv, pAllocPrivate,
+        nv_alloc_mapping_context_t tNvamc = { 0 };
+        NvU64 offset = 0;
+
+        portMemSet(&tNvamc, 0, sizeof(nv_alloc_mapping_context_t));
+
+        tNvamc.alloc = pAllocPrivate;
+        tNvamc.page_index = pageIndex;
+        tNvamc.prot = Protect;
+        tNvamc.valid = NV_TRUE;
+
+        rmStatus = _osAddMappingContext(&tNvamc, &offset);
+        switch (rmStatus)
+        {
+            case NV_OK:
+                nv_inc_alloc_refcount(pAllocPrivate);
+                pPrivate = pAllocPrivate;
+            case NV_ERR_NOT_SUPPORTED:
+                rmStatus = NV_OK;
+                break;
+            default:
+                return rmStatus;
+        }
+        NV_ASSERT_OK_OR_RETURN(nv_alloc_user_mapping(nv, pAllocPrivate,
                 pageIndex, pageOffset, Length, Protect, &userAddress,
-                &pPrivate);
-        if (rmStatus != NV_OK)
-        {
-            NV_PRINTF(LEVEL_ERROR,
-                      "failed to create system memory user mapping!\n");
-        }
-        else
-        {
-            *ppAddress = (NvP64)(userAddress);
-            *ppPrivate = NV_PTR_TO_NvP64(pPrivate);
-        }
+                &pPrivate));
+        *ppAddress = (NvP64)(userAddress);
+        *ppPrivate = NV_PTR_TO_NvP64(pPrivate);
     }
 
     return rmStatus;
@@ -603,6 +660,10 @@ void osUnmapSystemMemory
     {
         nv_free_user_mapping(nv, pAllocPrivate, (NvU64)pAddress,
                 NvP64_VALUE(pPrivate));
+        if (pPrivate != NvP64_NULL)
+        {
+            nv_dec_alloc_refcount(nv, NvP64_VALUE(pPrivate));
+        }
     }
 
     if (pGpu != NULL &&
@@ -741,14 +802,14 @@ NV_STATUS osCondAcquireRmSema(void *pSema)
     return NV_OK;
 }
 
-NvU32 osReleaseRmSema(void *pSema, OBJGPU *pDpcGpu)
+void osReleaseRmSema(void *pSema, OBJGPU *pDpcGpu)
 {
-    return NV_SEMA_RELEASE_SUCCEED;
+    return;
 }
 
 void osSpinLoop(void)
 {
-    
+
 }
 
 NvU64 osGetMaxUserVa(void)
@@ -886,7 +947,7 @@ NvBool osGpuSupportsAts(OBJGPU *pGpu)
     nv_state_t *nv = NV_GET_NV_STATE(pGpu);
 
     // Checks ATS support from both OS side and RM side.
-    return nv->ats_support && 
+    return nv->ats_support &&
         pGpu->getProperty(pGpu, PDB_PROP_GPU_ATS_SUPPORTED);
 }
 
@@ -1001,7 +1062,7 @@ NV_STATUS osAllocPagesInternal(
         if (status != NV_OK)
             goto done;
 
-        if (!IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc) && 
+        if (!IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc) &&
             NV_RM_PAGE_SIZE < os_page_size &&
             !memdescGetContiguity(pMemDesc, AT_CPU))
         {
@@ -1085,16 +1146,19 @@ NV_STATUS osAllocPagesInternal(
         goto done;
     }
 
+    // Associate pMemData with pMemDesc immediately to ensure cleanup on error
+    memdescSetMemData(pMemDesc, pMemData, NULL);
+
     // Guest allocated memory is already initialized
     if (!memdescGetFlag(pMemDesc, MEMDESC_FLAGS_GUEST_ALLOCATED))
     {
         if (IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc))
         {
-            NV_ASSERT_OK_OR_RETURN(memdescSetAllocSizeFields(pMemDesc, osPageCount * os_page_size, os_page_size));
+            NV_ASSERT_OK_OR_GOTO(status, memdescSetAllocSizeFields(pMemDesc, osPageCount * os_page_size, os_page_size), done);
         }
         else
         {
-            NV_ASSERT_OK_OR_RETURN(memdescSetAllocSizeFields(pMemDesc, rmPageCount * RM_PAGE_SIZE, RM_PAGE_SIZE));
+            NV_ASSERT_OK_OR_GOTO(status, memdescSetAllocSizeFields(pMemDesc, rmPageCount * RM_PAGE_SIZE, RM_PAGE_SIZE), done);
         }
     }
 
@@ -1104,7 +1168,7 @@ NV_STATUS osAllocPagesInternal(
     //
     if (IS_DISCONTIG_AND_DYNGRAN_ENABLED(pMemDesc))
     {
-        NV_ASSERT_OR_RETURN(pMemDesc->pageArrayGranularity == os_page_size, NV_ERR_INVALID_ARGUMENT);
+        NV_ASSERT_TRUE_OR_GOTO(status, pMemDesc->pageArrayGranularity == os_page_size, NV_ERR_INVALID_ARGUMENT, done);
     }
     else if (NV_RM_PAGE_SIZE < os_page_size &&
             !memdescGetContiguity(pMemDesc, AT_CPU))
@@ -1113,10 +1177,8 @@ NV_STATUS osAllocPagesInternal(
                                 pMemDesc->PageCount);
     }
 
-    memdescSetMemData(pMemDesc, pMemData, NULL);
-
     if ((pGpu != NULL) && IS_VIRTUAL(pGpu))
-        NV_ASSERT_OK_OR_RETURN(vgpuUpdateGuestSysmemPfnBitMap(pGpu, pMemDesc, NV_TRUE));
+        NV_ASSERT_OK_OR_GOTO(status, vgpuUpdateGuestSysmemPfnBitMap(pGpu, pMemDesc, NV_TRUE), done);
 done:
     return status;
 }
@@ -1206,42 +1268,35 @@ NV_STATUS osMapPciMemoryAreaUser
     memArea.pRanges[memArea.numRanges - 1llu].size = NV_ALIGN_UP64(origSize, os_page_size);
 
     {
-        nv_usermap_access_params_t **ppNvuap, tNvuap;
+        nv_alloc_mapping_context_t tNvamc = { 0 };
+        NvU64 offset = 0;
         NvU64 totalRangeSize = sizeof(MemoryRange) * memArea.numRanges;
 
-        portMemSet(&tNvuap, 0, sizeof(nv_usermap_access_params_t));
+        portMemSet(&tNvamc, 0, sizeof(nv_alloc_mapping_context_t));
 
-        tNvuap.memArea = memArea;
-        // access_size is only for caching, we can use os_page_size for now until linux has been properly plumbed
-        tNvuap.access_start = memArea.pRanges[0].start;
-        tNvuap.access_size = os_page_size;
-
-        tNvuap.caching = mode;
-        tNvuap.contig = NV_TRUE;
-
-        ppNvuap = (nv_usermap_access_params_t **) tlsEntryAcquire(TLS_ENTRY_ID_MAPPING_CONTEXT);
-        NV_ASSERT_OR_RETURN(ppNvuap != NULL, NV_ERR_INVALID_STATE);
+        tNvamc.memArea = memArea;
+        tNvamc.prot = protect;
+        tNvamc.caching = mode;
+        tNvamc.valid = NV_TRUE;
 
         NV_ASSERT_OK_OR_GOTO(status,
-            os_alloc_mem((void**) ppNvuap, sizeof(nv_alloc_mapping_context_t)),
-            free_tls);
+            os_alloc_mem((void**) &tNvamc.memArea.pRanges, totalRangeSize),
+            unalign_and_return);
 
-        portMemCopy(*ppNvuap, sizeof(nv_usermap_access_params_t),
-            &tNvuap, sizeof(nv_usermap_access_params_t));
+        portMemCopy(tNvamc.memArea.pRanges, totalRangeSize, memArea.pRanges, totalRangeSize);
 
-        NV_ASSERT_OK_OR_GOTO(status, 
-            os_alloc_mem((void**) &((*ppNvuap)->memArea.pRanges), totalRangeSize),
-            free_nvuap);
-
-        portMemCopy((*ppNvuap)->memArea.pRanges, totalRangeSize, memArea.pRanges, totalRangeSize);
+        status = _osAddMappingContext(&tNvamc, &offset);
+        if (status != NV_OK)
+        {
+            os_free_mem(tNvamc.memArea.pRanges);
+        }
+        if (status == NV_ERR_NOT_SUPPORTED)
+        {
+            status = NV_OK;
+        }
+        NV_ASSERT_OK_OR_GOTO(status, status, unalign_and_return);
 
         *pVirtualAddress = (NvP64) (memArea.pRanges[0].start + diffStart);
-        goto unalign_and_return;
-
-free_nvuap:
-        os_free_mem(*ppNvuap);
-free_tls:
-        tlsEntryRelease(TLS_ENTRY_ID_MAPPING_CONTEXT);
     }
 unalign_and_return:
     memArea.pRanges[memArea.numRanges - 1llu].size =  origSize;
@@ -1477,6 +1532,18 @@ static NV_STATUS referenceEventForPost(
 
     portSyncSpinlockRelease(nv->event_spinlock);
     return NV_OK;
+
+    (void)eventSnapshot;
+    (void)ppNvfp;
+
+    if (bDoRefCount)
+        return osReferenceObjectCount(event);
+
+    // Best effort. Can be changed in parallel by free_os_event.
+    if (event->active == 0)
+        return NV_ERR_INVALID_EVENT;
+
+    return NV_OK;
 }
 
 static void dereferenceEventForPost(
@@ -1499,6 +1566,12 @@ static void dereferenceEventForPost(
     }
 
     portAtomicDecrementS32(&nvfp->event_posting_refcount);
+    return;
+
+    (void)nvfp;
+
+    if (bDoRefCount)
+        osDereferenceObjectCount(event);
 }
 
 static void postEvent(
@@ -1511,10 +1584,9 @@ static void postEvent(
     NvBool bDoRefCount
 )
 {
-    nv_event_t *eventToPost = event;
-
     nv_file_private_t *nvfp = NULL;
     nv_event_t eventSnapshot;
+    nv_event_t *eventToPost = event;
 
     if (referenceEventForPost(event, bDoRefCount, &eventSnapshot, &nvfp) != NV_OK)
         return;
@@ -1631,6 +1703,9 @@ NV_STATUS osEventNotificationWithInfo
     if ((notifyIndex != OS_EVENT_NOTIFICATION_INDEX_ALL) &&
         (OS_EVENT_NOTIFICATION_INDEX_MATCH_SUBDEV & notifyIndex))
     {
+        if (pGpu == NULL)
+            return NV_ERR_INVALID_ARGUMENT;
+
         bMatchSubdev = NV_TRUE;
         notifyIndex &= ~OS_EVENT_NOTIFICATION_INDEX_MATCH_SUBDEV;
     }
@@ -1786,7 +1861,13 @@ NV_STATUS osDereferenceObjectCount(void *pOSEvent)
     return NV_OK;
 }
 
-NV_STATUS osUserHandleToKernelPtr(NvHandle hClient, NvP64 hEvent, NvP64 *pEvent)
+NV_STATUS
+osGetAndRefEventFromUserHandle
+(
+    NvHandle hClient,
+    NvP64 hEvent,
+    NvP64 *pEvent
+)
 {
     nv_state_t *nv = nv_get_ctl_state();
     NvU32 fd = (NvU64)hEvent;
@@ -2113,42 +2194,123 @@ NvU32 osGetCurrentProcessorNumber(void)
 
 ClientGroupID osClientGroupID(NvU64 process, void *pidInfo)
 {
-    return os_cgroup_for_pid(process, pidInfo);
+    int impl;
+    switch (osCgroupImplementation())
+    {
+    case CGROUP_IMPL_OS:
+        impl = OS_CGROUP_IMPL_DMEM;
+        break;
+    case CGROUP_IMPL_FALLBACK:
+        impl = OS_CGROUP_IMPL_MISC;
+        break;
+    default:
+        impl = OS_CGROUP_IMPL_NONE;
+        break;
+    }
+    return os_cgroup_for_pid(process, pidInfo, impl);
+}
+
+static const char *osCgroupImplString(NvCgroupImpl impl)
+{
+    switch (impl)
+    {
+    case CGROUP_IMPL_OS:       return "CGROUP_IMPL_OS";
+    case CGROUP_IMPL_FALLBACK: return "CGROUP_IMPL_FALLBACK";
+    case CGROUP_IMPL_NONE:     return "CGROUP_IMPL_NONE";
+    default:                   return "UNKNOWN";
+    }
 }
 
 NvCgroupImpl osCgroupImplementation(void)
 {
-    switch (os_cgroup_implementation())
+    static NvBool done = NV_FALSE;
+    static NvCgroupImpl impl = CGROUP_IMPL_NONE;
+
+    if (!done)
     {
-    case OS_CGROUP_IMPL_DMEM: return CGROUP_IMPL_OS;
-    case OS_CGROUP_IMPL_MISC: return CGROUP_IMPL_FALLBACK;
-    default:                  return CGROUP_IMPL_NONE;
+        NvCgroupImpl os_impl;
+        switch (os_cgroup_implementation())
+        {
+        case OS_CGROUP_IMPL_DMEM:
+            os_impl = CGROUP_IMPL_OS;
+            break;
+        case OS_CGROUP_IMPL_MISC:
+            os_impl = CGROUP_IMPL_FALLBACK;
+            break;
+        case OS_CGROUP_IMPL_NONE:
+        default:
+            os_impl = CGROUP_IMPL_NONE;
+            break;
+        }
+
+        NvU32 data = 0;
+        NvCgroupImpl reg_impl = os_impl;
+        NV_STATUS status = osReadRegistryDword(NULL, NV_REG_STR_MEMACCT_MODE, &data);
+        if (status == NV_OK)
+        {
+            switch (data)
+            {
+            case NV_REG_STR_MEMACCT_MODE_NONE:
+                reg_impl = CGROUP_IMPL_NONE;
+                break;
+            case NV_REG_STR_MEMACCT_MODE_FALLBACK:
+                reg_impl = CGROUP_IMPL_FALLBACK;
+                break;
+            case NV_REG_STR_MEMACCT_MODE_OS:
+                reg_impl = CGROUP_IMPL_OS;
+                break;
+            case NV_REG_STR_MEMACCT_MODE_NO_OVERRIDE:
+            default:
+                reg_impl = os_impl;
+                break;
+            }
+        }
+
+        impl = os_impl;
+        if (reg_impl < os_impl)
+        {
+            NV_PRINTF(LEVEL_INFO, "memacct implementation overriden to %s.\n", osCgroupImplString(reg_impl));
+            impl = reg_impl;
+        }
+        else if (reg_impl > os_impl)
+        {
+            NV_PRINTF(LEVEL_ERROR, "memacct override to %s not supported, using default (%s).\n",
+                osCgroupImplString(reg_impl), osCgroupImplString(os_impl));
+        }
+
+        done = NV_TRUE;
     }
+    return impl;
 }
 
-void *osCgroupRegisterRegion(OBJGPU *pGpu, NvU64 size)
+void *osCgroupRegisterRegion(OBJGPU *pGpu, NvU64 size, NvU64 precharge, void **prechargePool)
 {
-    char name[32];
-    nvDbgSnprintf(name, sizeof name, "nvidia/%04x:%02x:%02x/vidmem",
+    char name[64];
+    nvDbgSnprintf(name, sizeof name, "nvidia/%08X:%02X:%02X.0/vidmem",
         gpuGetDomain(pGpu),
         gpuGetBus(pGpu),
         gpuGetDevice(pGpu));
-    return os_dmem_cgroup_register_region(size, name);
+    return os_dmem_cgroup_register_region(name, size, precharge, prechargePool);
 }
 
-void osCgroupUnregisterRegion(void *region)
+void osCgroupUnregisterRegion(void *region, void *prechargePool, NvU64 precharge)
 {
-    os_dmem_cgroup_unregister_region(region);
+    os_dmem_cgroup_unregister_region(region, prechargePool, precharge);
 }
 
-NV_STATUS osMemacctTryCharge(void *pRegion, NvLength size, void **ppPool)
+NV_STATUS osMemacctTryCharge(void *pRegion, NvLength size, void **ppPool, void **limitPool)
 {
-    return os_dmem_cgroup_try_charge(pRegion, size, ppPool, NULL);
+    return os_dmem_cgroup_try_charge(pRegion, size, ppPool, limitPool);
 }
 
 void osMemacctReleaseCharge(void *pool, NvLength size)
 {
     os_dmem_cgroup_uncharge(pool, size);
+}
+
+void osMemacctPoolStatePut(void *pool)
+{
+    os_dmem_cgroup_pool_state_put(pool);
 }
 
 void *osCgroupGetFromFd(NvS32 fd)
@@ -2159,6 +2321,21 @@ void *osCgroupGetFromFd(NvS32 fd)
 void osCgroupPut(void *cgroup)
 {
     os_cgroup_put(cgroup);
+}
+
+void osCgroupGet(void *cgroup)
+{
+    os_cgroup_get(cgroup);
+}
+
+void *osCgroupParent(void *cgroup)
+{
+    return os_cgroup_parent(cgroup);
+}
+
+NvBool osCgroupCanEvict(void *limitPool, void *testPool)
+{
+    return os_dmem_cgroup_state_evict_valuable(limitPool, testPool, NV_TRUE, NULL);
 }
 
 void osGetTimeoutParams(OBJGPU *pGpu, NvU32 *pTimeoutUs, NvU32 *pScale, NvU32 *pFlags)
@@ -2175,7 +2352,7 @@ void osGetTimeoutParams(OBJGPU *pGpu, NvU32 *pTimeoutUs, NvU32 *pScale, NvU32 *p
         // seconds, imposed by WDDM driver rules.
         // Currently primary use case of VGX is Windows, so setting 1.8 as default
         //
-        *pTimeoutUs = 1.8 * 1000000;
+        *pTimeoutUs = NV_GPU_DEFAULT_TIMEOUT_US_VGPU;
     }
     else
     {
@@ -2183,11 +2360,11 @@ void osGetTimeoutParams(OBJGPU *pGpu, NvU32 *pTimeoutUs, NvU32 *pScale, NvU32 *p
         {
         default:
         case NV_GPU_MODE_GRAPHICS_MODE:
-            *pTimeoutUs = 4 * 1000000;
+            *pTimeoutUs = NV_GPU_DEFAULT_TIMEOUT_US_GRAPHICS_MODE;
             break;
 
         case NV_GPU_MODE_COMPUTE_MODE:
-            *pTimeoutUs = 30 * 1000000;
+            *pTimeoutUs = NV_GPU_DEFAULT_TIMEOUT_US_COMPUTE_MODE;
             break;
         }
     }
@@ -2462,8 +2639,8 @@ cliresCtrlCmdOsUnixExportObjectToFd_IMPL
     }
     NV_ASSERT(hExportHandle != 0);
 
-    nvfp = nv_get_file_private(pParams->fd, NV_TRUE, &priv);
-    if (nvfp == NULL)
+    nvfp = nv_get_file_private(pParams->fd, &priv);
+    if (!nv_verify_nvfp_control_or_put(&nvfp, &priv, NV_TRUE))
     {
         NV_ASSERT(priv == NULL);
         status = NV_ERR_INVALID_PARAMETER;
@@ -2515,8 +2692,8 @@ cliresCtrlCmdOsUnixCreateExportObjectFd_IMPL
         return NV_ERR_INVALID_PARAMETER;
     }
 
-    nvfp = nv_get_file_private(pParams->fd, NV_TRUE, &priv);
-    if (nvfp == NULL)
+    nvfp = nv_get_file_private(pParams->fd, &priv);
+    if (!nv_verify_nvfp_control_or_put(&nvfp, &priv, NV_TRUE))
     {
         NV_ASSERT(priv == NULL);
         status = NV_ERR_INVALID_PARAMETER;
@@ -2553,8 +2730,8 @@ cliresCtrlCmdOsUnixExportObjectsToFd_IMPL
     NvHandle          *exportHandles = NULL;
     NvBool             bFdSetup = NV_FALSE;
 
-    nvfp = nv_get_file_private(pParams->fd, NV_TRUE, &priv);
-    if (nvfp == NULL)
+    nvfp = nv_get_file_private(pParams->fd, &priv);
+    if (!nv_verify_nvfp_control_or_put(&nvfp, &priv, NV_TRUE))
     {
         NV_ASSERT(priv == NULL);
         status = NV_ERR_INVALID_PARAMETER;
@@ -2698,8 +2875,8 @@ cliresCtrlCmdOsUnixImportObjectFromFd_IMPL
         return NV_ERR_INVALID_PARAMETER;
     }
 
-    nvfp = nv_get_file_private(pParams->fd, NV_TRUE, &priv);
-    if (nvfp == NULL)
+    nvfp = nv_get_file_private(pParams->fd, &priv);
+    if (!nv_verify_nvfp_control_or_put(&nvfp, &priv, NV_TRUE))
     {
         NV_ASSERT(priv == NULL);
         status = NV_ERR_INVALID_PARAMETER;
@@ -2743,8 +2920,8 @@ cliresCtrlCmdOsUnixImportObjectsFromFd_IMPL
     NvU32              result;
     RM_API            *pRmApi;
 
-    nvfp = nv_get_file_private(pParams->fd, NV_TRUE, &priv);
-    if (nvfp == NULL)
+    nvfp = nv_get_file_private(pParams->fd, &priv);
+    if (!nv_verify_nvfp_control_or_put(&nvfp, &priv, NV_TRUE))
     {
         NV_ASSERT(priv == NULL);
         status = NV_ERR_INVALID_PARAMETER;
@@ -2831,8 +3008,8 @@ cliresCtrlCmdOsUnixGetExportObjectInfo_IMPL
         return NV_ERR_INVALID_PARAMETER;
     }
 
-    nvfp = nv_get_file_private(pParams->fd, NV_TRUE, &priv);
-    if (nvfp == NULL)
+    nvfp = nv_get_file_private(pParams->fd, &priv);
+    if (!nv_verify_nvfp_control_or_put(&nvfp, &priv, NV_TRUE))
     {
         NV_ASSERT(priv == NULL);
         status = NV_ERR_INVALID_PARAMETER;
@@ -2867,7 +3044,22 @@ cliresCtrlCmdOsUnixMemacctSetLimits_IMPL
     NV0000_CTRL_OS_UNIX_MEMACCT_SET_LIMITS_PARAMS *pParams
 )
 {
-    void *cgroup = osCgroupGetFromFd(pParams->cgroupFd);
+    void *cgroup = NULL;
+    if (pParams->cgroupFd == NV0000_CTRL_CMD_OS_UNIX_MEMACCT_CURRENT_PROCESS)
+    {
+        RsClient *pRsClient = RES_GET_CLIENT(pRmCliRes);
+        RmClient *pRmClient = dynamicCast(pRsClient, RmClient);
+        NvU64 pid = pRmClient->ProcID;
+        void *pidInfo = pRmClient->pOsPidInfo;
+        cgroup = osClientGroupID(pid, pidInfo);
+        if (cgroup != NULL)
+            osCgroupGet(cgroup);
+    }
+    else
+    {
+        cgroup = osCgroupGetFromFd(pParams->cgroupFd);
+    }
+
     if (cgroup == NULL)
     {
         return NV_ERR_INVALID_ARGUMENT;
@@ -2888,12 +3080,26 @@ cliresCtrlCmdOsUnixMemacctGetLimits_IMPL
     NvU32     gpuMask        = 0;
     NvU32     gpuIdx         = 0;
     OBJGPU   *pGpu           = NULL;
-    NV_STATUS status         = NV_OK;
 
     pParams->count = 0;
     NV_ASSERT_OK_OR_RETURN(gpumgrGetGpuAttachInfo(NULL, &gpuMask));
 
-    void *cgroup = osCgroupGetFromFd(pParams->cgroupFd);
+    void *cgroup = NULL;
+    if (pParams->cgroupFd == NV0000_CTRL_CMD_OS_UNIX_MEMACCT_CURRENT_PROCESS)
+    {
+        RsClient *pRsClient = RES_GET_CLIENT(pRmCliRes);
+        RmClient *pRmClient = dynamicCast(pRsClient, RmClient);
+        NvU64 pid = pRmClient->ProcID;
+        void *pidInfo = pRmClient->pOsPidInfo;
+        cgroup = osClientGroupID(pid, pidInfo);
+        if (cgroup != NULL)
+            osCgroupGet(cgroup);
+    }
+    else
+    {
+        cgroup = osCgroupGetFromFd(pParams->cgroupFd);
+    }
+
     if (cgroup == NULL)
     {
         return NV_ERR_INVALID_ARGUMENT;
@@ -2903,19 +3109,53 @@ cliresCtrlCmdOsUnixMemacctGetLimits_IMPL
     while ((i < NV0000_CTRL_GPU_MAX_ATTACHED_GPUS) &&
         ((pGpu = gpumgrGetNextGpu(gpuMask, &gpuIdx)) != NULL))
     {
-        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-            memacctGetLimits((ClientGroupID)cgroup, pGpu->gpuId,
+        NV_STATUS status = memacctGetLimits((ClientGroupID)cgroup, pGpu->gpuId,
                 &pParams->limits[i].soft,
                 &pParams->limits[i].hard,
-                &pParams->limits[i].current),
-            out);
-        pParams->limits[i].gpuId = pGpu->gpuId;
-        i++;
+                &pParams->limits[i].current);
+
+        // ignore errors - something might be wrong with one gpu and not another, so try
+        // to get as much information as possible to the caller.
+        if (status == NV_OK)
+        {
+            pParams->limits[i].gpuId = pGpu->gpuId;
+            i++;
+        }
     }
     pParams->count = i;
-out:
+
     osCgroupPut(cgroup);
-    return status;
+
+    // let the caller know if there are no limits to return (might be root cgroup for example)
+    if (i == 0)
+    {
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    return NV_OK;
+}
+
+NV_STATUS
+cliresCtrlCmdOsUnixMemacctGetImpl_IMPL
+(
+    RmClientResource *pRmCliRes,
+    NV0000_CTRL_OS_UNIX_MEMACCT_GET_IMPL_PARAMS *pParams
+)
+{
+    switch (memacctActiveImplementation())
+    {
+    case CGROUP_IMPL_FALLBACK:
+        pParams->impl = NV0000_CTRL_CMD_OS_UNIX_MEMACCT_IMPL_FALLBACK;
+        break;
+    case CGROUP_IMPL_OS:
+        pParams->impl = NV0000_CTRL_CMD_OS_UNIX_MEMACCT_IMPL_OS;
+        break;
+    case CGROUP_IMPL_NONE:
+    default:
+        pParams->impl = NV0000_CTRL_CMD_OS_UNIX_MEMACCT_IMPL_NONE;
+        break;
+    }
+    return NV_OK;
 }
 
 /*!
@@ -2987,16 +3227,16 @@ NV_STATUS osCallACPI_DSM
             pAcpiDsmGuid = (NvU8 *) &PCFG_DSM_GUID;
             acpiDsmRev  = PCFG_REVISION_ID;
             break;
-        case ACPI_DSM_FUNCTION_GPS_2X:
-            pAcpiDsmGuid = (NvU8 *) &GPS_DSM_GUID;
-            acpiDsmRev = GPS_2X_REVISION_ID;
+        case ACPI_DSM_FUNCTION_PRH_2X:
+            pAcpiDsmGuid = (NvU8 *) &PRH_DSM_GUID;
+            acpiDsmRev = PRH_2X_REVISION_ID;
             acpiDsmInArgSize = (*pSize);
             break;
-        case ACPI_DSM_FUNCTION_GPS:
+        case ACPI_DSM_FUNCTION_PRH:
             if (IsTU10X(pGpu))
             {
-                pAcpiDsmGuid = (NvU8 *) &GPS_DSM_GUID;
-                acpiDsmRev = GPS_REVISION_ID;
+                pAcpiDsmGuid = (NvU8 *) &PRH_DSM_GUID;
+                acpiDsmRev = PRH_REVISION_ID;
                 acpiDsmInArgSize = (*pSize);
             }
             else
@@ -3027,6 +3267,12 @@ NV_STATUS osCallACPI_DSM
         case ACPI_DSM_FUNCTION_NVPCF_2X:
             pAcpiDsmGuid = (NvU8 *)&NVPCF_ACPI_DSM_GUID;
             acpiDsmRev = NVPCF_2X_ACPI_DSM_REVISION_ID;
+            acpiDsmInArgSize = (*pSize);
+            acpiNvpcfDsmFunction = NV_TRUE;
+            break;
+        case ACPI_DSM_FUNCTION_NVPCF_3X:
+            pAcpiDsmGuid = (NvU8 *)&NVPCF_ACPI_DSM_GUID;
+            acpiDsmRev = NVPCF_3X_ACPI_DSM_REVISION_ID;
             acpiDsmInArgSize = (*pSize);
             acpiNvpcfDsmFunction = NV_TRUE;
             break;
@@ -3145,7 +3391,7 @@ NV_STATUS  osCallACPI_NVHG_ROM
 
 void osInitSystemStaticConfig(SYS_STATIC_CONFIG *pConfig)
 {
-    pConfig->bIsNotebook = rm_is_system_notebook();
+    pConfig->bIsNotebook = nv_is_chassis_notebook() || nv_acpi_is_battery_present();
     pConfig->bOsCCEnabled = os_cc_enabled;
     pConfig->bOsCCSevSnpEnabled = os_cc_sev_snp_enabled;
     pConfig->bOsCCSmeEnabled = os_cc_sme_enabled;
@@ -3153,14 +3399,9 @@ void osInitSystemStaticConfig(SYS_STATIC_CONFIG *pConfig)
     pConfig->bOsCCTdxEnabled = os_cc_tdx_enabled;
 }
 
-NvU32 osApiLockAcquireConfigureFlags(NvU32 flags)
+NvBool osTdispIsEnabled(OBJGPU *pGpu)
 {
-    return flags;
-}
-
-NV_STATUS osGpuLocksQueueRelease(OBJGPU *pGpu, NvU32 dpcGpuLocksRelease)
-{
-    return NV_SEMA_RELEASE_FAILED;
+    return os_tdisp_enabled;
 }
 
 void osSyncWithRmDestroy(void)
@@ -3177,8 +3418,10 @@ void osModifyGpuSwStatePersistence
     NvBool       bEnable
 )
 {
-    if (!osIsLegacyPersistenceModeSupported(pOsGpuInfo))
+    if (osIsInitOnProbeEnabled(pOsGpuInfo))
+    {
         return;
+    }
 
     if (bEnable)
     {
@@ -3303,9 +3546,9 @@ cleanup:
     return rmStatus;
 }
 
-NV_STATUS osTegraiGpuPerfBoost(OBJGPU *pGpu, NvBool enable, NvU32 duration)
+NV_STATUS osTegraiGpuPerfBoost(OBJGPU *pGpu, NvBool enable, NvU32 duration, int boost_type)
 {
-    return os_tegra_igpu_perf_boost(pGpu->pOsGpuInfo, enable, duration);
+    return os_tegra_igpu_perf_boost(pGpu->pOsGpuInfo, enable, duration, boost_type);
 }
 
 NV_STATUS osGetVersion(NvU32 *majorVer, NvU32 *minorVer, NvU32 *buildNum, NvU16 *unusedPatchVersion, NvU16 *unusedProductType)
@@ -3339,6 +3582,23 @@ NvBool osIsBifResetSupported(OS_GPU_INFO *pOsGpuInfo)
     return os_is_bif_reset_supported((void *)pOsGpuInfo);
 }
 
+void osSetCachedPersistenceMode
+(
+    OS_GPU_INFO *pOsGpuInfo,
+    NvBool       bEnable
+)
+{
+    pOsGpuInfo->cached_persistence_mode = bEnable;
+}
+
+NvBool osGetCachedPersistenceMode
+(
+    OS_GPU_INFO *pOsGpuInfo
+)
+{
+    return pOsGpuInfo->cached_persistence_mode;
+}
+
 NV_STATUS
 osGetCarveoutInfo
 (
@@ -3346,7 +3606,7 @@ osGetCarveoutInfo
     NvU64 *pSize
 )
 {
-    return NV_ERR_NOT_SUPPORTED;
+    return nv_get_carveout_info(pAddr, pSize);
 }
 
 NV_STATUS
@@ -3410,8 +3670,8 @@ i2cSwPortMapping(
      *  conversion as the physical controller number was updated to 0 and RM passes the
      *  same.
      */
-    if ((nv->disp_sw_soc_chip_id == NV_CHIP_ID_T234)
-        || (nv->disp_sw_soc_chip_id == NV_CHIP_ID_T239)
+    if (nv->disp_sw_soc_chip_id == NV_CHIP_ID_T234
+        || (nv->disp_sw_soc_chip_id == NV_CHIP_ID_T238)
         )
     {
         linuxI2CSwPort = physicalI2CPort - 1;
@@ -3692,17 +3952,29 @@ osIovaMap
     // since the physical address is already the DMA address to be used by the
     // GPU.
     //
-    // For carveout memory, we setup identity mapping, so physical
-    // address is same as the DMA address.
-    //
-    //
-    if (memdescIsCarveoutMemory(pIovaMapping->pPhysMemDesc) ||
-        memdescGetFlag(pIovaMapping->pPhysMemDesc, MEMDESC_FLAGS_GUEST_ALLOCATED))
+    if (memdescGetFlag(pIovaMapping->pPhysMemDesc, MEMDESC_FLAGS_GUEST_ALLOCATED))
     {
         return NV_OK;
     }
 
     nv = NV_GET_NV_STATE(pGpu);
+    if (nv == NULL)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+
+    //
+    // Bug 6758260 tracks the pending work to enable IOVA mapping for
+    // SoC-display carveout memory on Tegra MDM, where it currently causes a
+    // crash. Until it is fixed, skip IOVA mapping for this carveout memory.
+    //
+    if (memdescIsCarveoutMemory(pIovaMapping->pPhysMemDesc) &&
+        (pGpu->getProperty(pGpu, PDB_PROP_GPU_IS_SOC_SDM) ||
+         NV_IS_SOC_DISPLAY_DEVICE(nv)))
+    {
+        return NV_OK;
+    }
+
     if (IS_DISCONTIG_AND_DYNGRAN_ENABLED(pIovaMapping->pPhysMemDesc))
     {
         osPageCount = pIovaMapping->pPhysMemDesc->PageCount;
@@ -3885,17 +4157,25 @@ osIovaUnmap
         return;
     }
 
-    //
-    // For guest-allocated or carveout memory, we never actually remapped the
-    // memory, so we shouldn't try to unmap it here.
-    //
-    if (memdescIsCarveoutMemory(pIovaMapping->pPhysMemDesc) ||
-        memdescGetFlag(pIovaMapping->pPhysMemDesc, MEMDESC_FLAGS_GUEST_ALLOCATED))
+    nv = NV_GET_NV_STATE(pGpu);
+    if (nv == NULL)
     {
         return;
     }
 
-    nv = NV_GET_NV_STATE(pGpu);
+    //
+    // Bug 6758260 tracks the pending work to enable IOVA mapping for
+    // SoC-display carveout memory on Tegra MDM, where it currently causes a
+    // crash. Until it is fixed, skip IOVA unmap because no mapping was created
+    // for this carveout memory.
+    //
+    if (memdescGetFlag(pIovaMapping->pPhysMemDesc, MEMDESC_FLAGS_GUEST_ALLOCATED) ||
+        (memdescIsCarveoutMemory(pIovaMapping->pPhysMemDesc) &&
+         (pGpu->getProperty(pGpu, PDB_PROP_GPU_IS_SOC_SDM) ||
+          NV_IS_SOC_DISPLAY_DEVICE(nv))))
+    {
+        return;
+    }
 
     if (skipIovaMappingForTegra(pIovaMapping, nv))
     {
@@ -4634,12 +4914,12 @@ osAllocPagesNode
 (
     NvS32       nid,
     NvLength    size,
-    NvU32       flag,
+    NvU32       flags,
     NvU64      *pAddress
 )
 {
     NV_STATUS  status    = NV_OK;
-    NvU32      localFlag = NV_ALLOC_PAGES_NODE_NONE;
+    NvU32      localFlags = NV_ALLOC_PAGES_NODE_NONE;
 
     if (pAddress == NULL || nid < 0 || size > NV_U32_MAX)
     {
@@ -4647,12 +4927,18 @@ osAllocPagesNode
     }
 
     // Translate the flags
-    if (flag & OS_ALLOC_PAGES_NODE_SKIP_RECLAIM)
+    if (flags & OS_ALLOC_PAGES_NODE_SKIP_RECLAIM)
     {
-        localFlag |= NV_ALLOC_PAGES_NODE_SKIP_RECLAIM;
+        localFlags |= NV_ALLOC_PAGES_NODE_SKIP_RECLAIM;
     }
 
-    status = os_alloc_pages_node(nid, (NvU32)size, localFlag, pAddress);
+    // Translate the flags
+    if (flags & OS_ALLOC_PAGES_NODE_DO_ACCOUNT)
+    {
+        localFlags |= NV_ALLOC_PAGES_NODE_DO_ACCOUNT;
+    }
+
+    status = os_alloc_pages_node(nid, (NvU32)size, localFlags, pAddress);
     return status;
 }
 
@@ -4723,8 +5009,8 @@ NvU64
 osGetSupportedSysmemPageSizeMask(void)
 {
     //
-    // We assume that the kernel can support all power-of-two pagesizes 
-    // between os_page_size and os_max_page_size (inclusive).  Return a 
+    // We assume that the kernel can support all power-of-two pagesizes
+    // between os_page_size and os_max_page_size (inclusive).  Return a
     // bitmask containing all of those.
     //
     return (((os_max_page_size << 1) - 1) & (~(os_page_size - 1)));
@@ -4739,21 +5025,24 @@ osGetPageShift(void)
 
 
 /*
- * @brief Opens a new temporary file for reading and writing
+ * @brief Opens a new temporary file for reading and writing, optionally
+ *        pre-allocating backing storage via fallocate.
  *
  * @param[in]  ppFile      void double pointer
+ * @param[in]  size        If non-zero, reserve this many bytes via fallocate.
  *
  * @returns NV_STATUS, NV_OK if success,
                        NV_ERR_GENERIC, if error
                        NV_ERR_NOT_SUPPORTED, for unsupported platforms
  */
 NV_STATUS
-osOpenTemporaryFile
+osAllocateTemporaryFile
 (
-    void **ppFile
+    void **ppFile,
+    NvU64 size
 )
 {
-    return os_open_temporary_file(ppFile);
+    return os_allocate_temporary_file(ppFile, size);
 }
 
 /*
@@ -5157,7 +5446,9 @@ osRmCapRelease
 #define OS_RM_CAP_SYS_PROFILER_DEVICE_FILE      4
 #define OS_RM_CAP_SYS_PROFILER_CONTEXT_FILE     5
 #define OS_RM_CAP_SYS_TRACE_DEVICE_FILE         6
-#define OS_RM_CAP_SYS_COUNT                     7
+#define OS_RM_CAP_SYS_WPPS_ACCESS_FILE          7
+#define OS_RM_CAP_SYS_MNCC_MGMT_FILE            8
+#define OS_RM_CAP_SYS_COUNT                     9
 
 NV_STATUS
 osRmCapRegisterSys
@@ -5245,6 +5536,24 @@ osRmCapRegisterSys
     }
     ppCaps[OS_RM_CAP_SYS_TRACE_DEVICE_FILE] = cap;
 
+    cap = os_nv_cap_create_file_entry(nvidia_caps_root, "wpps-access", OS_RUSR);
+    if (cap == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed to create wpps-access file\n");
+        status = NV_ERR_OPERATING_SYSTEM;
+        goto failed;
+    }
+    ppCaps[OS_RM_CAP_SYS_WPPS_ACCESS_FILE] = cap;
+
+    cap = os_nv_cap_create_file_entry(nvidia_caps_root, "mncc-mgmt", OS_RUSR);
+    if (cap == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed to create mncc-mgmt file\n");
+        status = NV_ERR_OPERATING_SYSTEM;
+        goto failed;
+    }
+    ppCaps[OS_RM_CAP_SYS_MNCC_MGMT_FILE] = cap;
+
     return NV_OK;
 
 failed:
@@ -5331,6 +5640,16 @@ osRmCapAcquire
         case NV_RM_CAP_SYS_TRACE_DEVICE:
         {
             index = OS_RM_CAP_SYS_TRACE_DEVICE_FILE;
+            break;
+        }
+        case NV_RM_CAP_SYS_WPPS_ACCESS:
+        {
+            index = OS_RM_CAP_SYS_WPPS_ACCESS_FILE;
+            break;
+        }
+        case NV_RM_CAP_SYS_MNCC_MGMT:
+        {
+            index = OS_RM_CAP_SYS_MNCC_MGMT_FILE;
             break;
         }
         default:
@@ -5934,11 +6253,15 @@ osDestroyNanoTimer
     return NV_OK;
 }
 
+NvU64 osGetReclaimableMemoryUsage(void)
+{
+    return os_get_reclaimable_memory_usage();
+}
 
 NvBool osIsNonPreemptableDebuggerSessionActive(OBJGPU *pGpu)
 {
     NvU32 data = 0;
-    if ((osReadRegistryDword(pGpu, NV_REG_STR_RM_NON_PREEMTABLE_DEBUGGER_SESSION_ACTIVE, &data) == NV_OK) && (data == NV_REG_STR_RM_NON_PREEMTABLE_DEBUGGER_SESSION_ACTIVE_ENABLE)) 
+    if ((osReadRegistryDword(pGpu, NV_REG_STR_RM_NON_PREEMTABLE_DEBUGGER_SESSION_ACTIVE, &data) == NV_OK) && (data == NV_REG_STR_RM_NON_PREEMTABLE_DEBUGGER_SESSION_ACTIVE_ENABLE))
     {
         return NV_TRUE;
     }
@@ -6282,6 +6605,30 @@ osGetEgmInfo
     return nv_get_egm_info(NV_GET_NV_STATE(pGpu), pPhysAddr, pSize, pNodeId);
 }
 
+NV_STATUS osInitSysmemWindowForFabricAccess
+(
+    OBJGPU *pGpu,
+    NvU64   alignment,
+    NvU64  *pDmaAddr,
+    NvU64  *pDmaSize,
+    NvBool *pbDmaIdentity
+)
+{
+    return nv_dma_init_sysmem_window_for_fabric_access(NV_GET_NV_STATE(pGpu), alignment,
+                                                       pDmaAddr, pDmaSize, pbDmaIdentity);
+}
+
+void osDestroySysmemWindowForFabricAccess
+(
+    OBJGPU *pGpu,
+    NvU64   dmaAddr,
+    NvU64   dmaSize
+)
+{
+    nv_dma_destroy_sysmem_window_for_fabric_access(NV_GET_NV_STATE(pGpu),
+                                                   dmaAddr, dmaSize);
+}
+
 /*!
  * @brief Offline (i.e., blacklist) the page containing a given address from OS kernel.
  *
@@ -6324,6 +6671,70 @@ osDisableConsoleManagement
 }
 
 /*
+ * @brief Read the realm-cached device attestation certificate for this GPU.
+ *
+ * @param[in]     pGpu         GPU object pointer
+ * @param[out]    pBuffer      Destination buffer for the certificate
+ * @param[in,out] pBufferSize  In: buffer capacity; Out: certificate size
+ *
+ * @returns NV_OK on success, NV_ERR_BUFFER_TOO_SMALL if the certificate does
+ *          not fit (pBufferSize is still updated with the required size), or
+ *          another error code on failure.
+ */
+NV_STATUS osReadDeviceCertificate(OBJGPU *pGpu, NvU8 *pBuffer, NvU32 *pBufferSize)
+{
+    nv_state_t *nv = NV_GET_NV_STATE(pGpu);
+
+    if (nv == NULL)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+
+    if ((pBuffer == NULL) || (pBufferSize == NULL))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return os_read_device_certificate(nv, pBuffer, pBufferSize);
+}
+
+/*
+ * @brief Fetch the TSM's device certificate digest and locally hash the chain.
+ *
+ * @param[in]     pGpu           GPU object pointer
+ * @param[in]     pCertChain     device certificate chain to hash
+ * @param[in]     certChainSize  size of pCertChain in bytes
+ * @param[out]    pTsmDigest     digest reported by the TSM
+ * @param[out]    pLocalDigest   digest computed over pCertChain
+ * @param[in,out] pDigestSize    buffer capacity in, digest size used out
+ *
+ * @returns NV_OK on success, or another error code on failure.
+ */
+NV_STATUS osReadDeviceCertDigests(OBJGPU     *pGpu,
+                                  const NvU8 *pCertChain,
+                                  NvU32       certChainSize,
+                                  NvU8       *pTsmDigest,
+                                  NvU8       *pLocalDigest,
+                                  NvU32      *pDigestSize)
+{
+    nv_state_t *nv = NV_GET_NV_STATE(pGpu);
+
+    if (nv == NULL)
+    {
+        return NV_ERR_INVALID_STATE;
+    }
+
+    if ((pCertChain == NULL) || (pTsmDigest == NULL) ||
+        (pLocalDigest == NULL) || (pDigestSize == NULL))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return os_read_device_cert_digests(nv, pCertChain, certChainSize,
+                                       pTsmDigest, pLocalDigest, pDigestSize);
+}
+
+/*
  * @brief Return NV_TRUE if GPU is configured as CXL device.
  *
  * @param[in]   pGpu             GPU object pointer
@@ -6356,4 +6767,18 @@ osCxlSetCaching
     nv_state_t *nv = NV_GET_NV_STATE(pGpu);
 
     nv_pci_cxl_set_caching(nv, bEnableCache);
+}
+
+NV_STATUS osEmitTracepointGpuOpEvent
+(
+    OBJGPU                  *pGpu,
+    const nv_gpu_op_event_t *op_event
+)
+{
+    nv_state_t *nv = NULL;
+
+    if (pGpu != NULL)
+        nv = NV_GET_NV_STATE(pGpu);
+
+    return nv_emit_tracepoint_gpu_op_event(nv, op_event);
 }

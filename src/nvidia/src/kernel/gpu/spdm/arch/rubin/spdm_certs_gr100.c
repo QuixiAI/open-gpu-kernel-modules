@@ -26,7 +26,7 @@
  */
 
 /* ------------------------ Includes --------------------------------------- */
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "gpu/spdm/spdm.h"
 
 /* ------------------------ Public Functions ------------------------------- */
@@ -72,6 +72,10 @@ spdmGetIndividualCertificate_GR100
     {
         case NV_SPDM_REQ_L1_CERTIFICATE_ID:
             pBinArchive = spdmGetBinArchiveL1Certificate_IMPL(pSpdm);
+        break;
+
+        case NV_SPDM_FSP_L1_CERTIFICATE_ID:
+            pBinArchive = spdmGetBinArchiveFspL1Certificate_IMPL(pSpdm);
         break;
 
         case NV_SPDM_REQ_L2_CERTIFICATE_ID:

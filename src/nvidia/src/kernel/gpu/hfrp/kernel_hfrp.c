@@ -48,6 +48,7 @@ _hfrpWriteByte
     NvU32 tempData = HFRP_REG_RD32(pKernelHfrp, ((virtualAddr >> 2U) << 2U));
     tempData = FLD_IDX_SET_DRF_NUM(_HFRP, _BYTE, _FIELD, (virtualAddr % 4U), data, tempData);
     HFRP_REG_WR32(pKernelHfrp, ((virtualAddr >> 2U) << 2U), tempData);
+    HFRP_REG_RD32(pKernelHfrp, ((virtualAddr >> 2U) << 2U));
 }
 
 static NvU32
@@ -96,6 +97,7 @@ _hfrpWriteMailboxData
             }
         }
         HFRP_REG_WR32(pKernelHfrp, writeAddr, dword);
+        HFRP_REG_RD32(pKernelHfrp, writeAddr);
     }
     return virtualAddr;
 }
@@ -585,6 +587,7 @@ khfrpWriteBit_IMPL
     dword &= mask;
     dword |= ((data ? 1U : 0U) << bitIndex);
     HFRP_REG_WR32(pKernelHfrp, virtualAddr, dword);
+    HFRP_REG_RD32(pKernelHfrp, virtualAddr);
 }
 
 NV_STATUS
@@ -815,8 +818,12 @@ khfrpPostCommandBlocking_IMPL
 
     status = khfrpMailboxQueueMessage_IMPL(pKernelHfrp, commandHeader,
         pCommandPayload, commandPayloadSize, HFRP_COMMAND_MAILBOX_FLAG);
-    if (status == NV_ERR_BUFFER_FULL)
+    if (status != NV_OK)
     {
+        NV_PRINTF(LEVEL_ERROR,
+                  "Failed to queue HFRP command 0x%x with status = 0x%08X\n",
+                  commandIndex,
+                  status);
         khfrpFreeSequenceId_IMPL(pKernelHfrp, sequenceId);
         return status;
     }

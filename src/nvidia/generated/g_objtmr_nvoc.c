@@ -38,7 +38,7 @@ extern const struct NVOC_CASTINFO __nvoc_castinfo__OBJTMR;
 extern const struct NVOC_EXPORT_INFO __nvoc_export_info__OBJTMR;
 
 // Down-thunk(s) to bridge OBJTMR methods from ancestors (if any)
-void __nvoc_down_thunk_OBJTMR_intrservRegisterIntrService(OBJGPU *pGpu, struct IntrService *pTmr, IntrServiceRecord pRecords[181]);    // this
+void __nvoc_down_thunk_OBJTMR_intrservRegisterIntrService(OBJGPU *pGpu, struct IntrService *pTmr, IntrServiceRecord pRecords[320]);    // this
 NvBool __nvoc_down_thunk_OBJTMR_intrservClearInterrupt(OBJGPU *pGpu, struct IntrService *pTmr, IntrServiceClearInterruptArguments *pParams);    // this
 NvU32 __nvoc_down_thunk_OBJTMR_intrservServiceInterrupt(OBJGPU *pGpu, struct IntrService *pTmr, IntrServiceServiceInterruptArguments *pParams);    // this
 NV_STATUS __nvoc_down_thunk_OBJTMR_engstateConstructEngine(OBJGPU *pGpu, struct OBJENGSTATE *pTmr, ENGDESCRIPTOR arg3);    // this
@@ -50,20 +50,13 @@ NV_STATUS __nvoc_down_thunk_OBJTMR_engstateStateUnload(OBJGPU *pGpu, struct OBJE
 void __nvoc_down_thunk_OBJTMR_engstateStateDestroy(OBJGPU *pGpu, struct OBJENGSTATE *pTmr);    // this
 
 // Up-thunk(s) to bridge OBJTMR methods to ancestors (if any)
-void __nvoc_up_thunk_OBJENGSTATE_tmrInitMissing(struct OBJGPU *pGpu, struct OBJTMR *pEngstate);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_tmrStatePreInitUnlocked(struct OBJGPU *pGpu, struct OBJTMR *pEngstate);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_tmrStatePreLoad(struct OBJGPU *pGpu, struct OBJTMR *pEngstate, NvU32 arg3);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_tmrStatePostLoad(struct OBJGPU *pGpu, struct OBJTMR *pEngstate, NvU32 arg3);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_tmrStatePreUnload(struct OBJGPU *pGpu, struct OBJTMR *pEngstate, NvU32 arg3);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_tmrStatePostUnload(struct OBJGPU *pGpu, struct OBJTMR *pEngstate, NvU32 arg3);    // this
-NvBool __nvoc_up_thunk_OBJENGSTATE_tmrIsPresent(struct OBJGPU *pGpu, struct OBJTMR *pEngstate);    // this
-NV_STATUS __nvoc_up_thunk_IntrService_tmrServiceNotificationInterrupt(OBJGPU *pGpu, struct OBJTMR *pIntrService, IntrServiceServiceNotificationInterruptArguments *pParams);    // this
 
 // Class-specific details for OBJTMR
 const struct NVOC_CLASS_DEF __nvoc_class_def_OBJTMR = 
 {
     .classInfo.size =               sizeof(OBJTMR),
     .classInfo.classId =            classId(OBJTMR),
+    .classInfo.visibility =         NVOC_EVENT_VISIBILITY_NONEVENT,
     .classInfo.providerId =         &__nvoc_rtti_provider,
 #if NV_PRINTF_STRINGS_ALLOWED
     .classInfo.name =               "OBJTMR",
@@ -74,7 +67,7 @@ const struct NVOC_CLASS_DEF __nvoc_class_def_OBJTMR =
 };
 
 
-// Metadata with per-class RTTI and vtable with ancestor(s)
+// Metadata with per-class RTTI with ancestor(s)
 static const struct NVOC_METADATA__OBJTMR __nvoc_metadata__OBJTMR = {
     .rtti.pClassDef = &__nvoc_class_def_OBJTMR,    // (tmr) this
     .rtti.dtor      = &__nvoc_dtor_OBJTMR,
@@ -89,40 +82,25 @@ static const struct NVOC_METADATA__OBJTMR __nvoc_metadata__OBJTMR = {
     .metadata__IntrService.rtti.dtor      = &__nvoc_destructFromBase,
     .metadata__IntrService.rtti.offset    = NV_OFFSETOF(OBJTMR, __nvoc_base_IntrService),
 
-    .vtable.__tmrRegisterIntrService__ = &tmrRegisterIntrService_IMPL,    // virtual override (intrserv) base (intrserv)
     .metadata__IntrService.vtable.__intrservRegisterIntrService__ = &__nvoc_down_thunk_OBJTMR_intrservRegisterIntrService,    // virtual
-    .vtable.__tmrClearInterrupt__ = &tmrClearInterrupt_IMPL,    // virtual override (intrserv) base (intrserv)
     .metadata__IntrService.vtable.__intrservClearInterrupt__ = &__nvoc_down_thunk_OBJTMR_intrservClearInterrupt,    // virtual
     .metadata__IntrService.vtable.__intrservServiceInterrupt__ = &__nvoc_down_thunk_OBJTMR_intrservServiceInterrupt,    // virtual
-    .vtable.__tmrConstructEngine__ = &tmrConstructEngine_IMPL,    // virtual override (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateConstructEngine__ = &__nvoc_down_thunk_OBJTMR_engstateConstructEngine,    // virtual
-    .vtable.__tmrStatePreInitLocked__ = &tmrStatePreInitLocked_IMPL,    // virtual override (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePreInitLocked__ = &__nvoc_down_thunk_OBJTMR_engstateStatePreInitLocked,    // virtual
-    .vtable.__tmrStateInitLocked__ = &tmrStateInitLocked_IMPL,    // virtual override (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateInitLocked__ = &__nvoc_down_thunk_OBJTMR_engstateStateInitLocked,    // virtual
-    .vtable.__tmrStateInitUnlocked__ = &tmrStateInitUnlocked_IMPL,    // virtual override (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateInitUnlocked__ = &__nvoc_down_thunk_OBJTMR_engstateStateInitUnlocked,    // virtual
-    .vtable.__tmrStateLoad__ = &tmrStateLoad_IMPL,    // virtual override (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateLoad__ = &__nvoc_down_thunk_OBJTMR_engstateStateLoad,    // virtual
-    .vtable.__tmrStateUnload__ = &tmrStateUnload_IMPL,    // virtual override (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateUnload__ = &__nvoc_down_thunk_OBJTMR_engstateStateUnload,    // virtual
-    .vtable.__tmrStateDestroy__ = &tmrStateDestroy_IMPL,    // virtual override (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateDestroy__ = &__nvoc_down_thunk_OBJTMR_engstateStateDestroy,    // virtual
-    .vtable.__tmrInitMissing__ = &__nvoc_up_thunk_OBJENGSTATE_tmrInitMissing,    // virtual inherited (engstate) base (engstate)
+    .metadata__OBJENGSTATE.vtable.__engstateConstructApertures__ = &engstateConstructApertures_IMPL,    // virtual
+    .metadata__OBJENGSTATE.vtable.__engstateDestructApertures__ = &engstateDestructApertures_IMPL,    // virtual
     .metadata__OBJENGSTATE.vtable.__engstateInitMissing__ = &engstateInitMissing_IMPL,    // virtual
-    .vtable.__tmrStatePreInitUnlocked__ = &__nvoc_up_thunk_OBJENGSTATE_tmrStatePreInitUnlocked,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePreInitUnlocked__ = &engstateStatePreInitUnlocked_IMPL,    // virtual
-    .vtable.__tmrStatePreLoad__ = &__nvoc_up_thunk_OBJENGSTATE_tmrStatePreLoad,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePreLoad__ = &engstateStatePreLoad_IMPL,    // virtual
-    .vtable.__tmrStatePostLoad__ = &__nvoc_up_thunk_OBJENGSTATE_tmrStatePostLoad,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePostLoad__ = &engstateStatePostLoad_IMPL,    // virtual
-    .vtable.__tmrStatePreUnload__ = &__nvoc_up_thunk_OBJENGSTATE_tmrStatePreUnload,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePreUnload__ = &engstateStatePreUnload_IMPL,    // virtual
-    .vtable.__tmrStatePostUnload__ = &__nvoc_up_thunk_OBJENGSTATE_tmrStatePostUnload,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePostUnload__ = &engstateStatePostUnload_IMPL,    // virtual
-    .vtable.__tmrIsPresent__ = &__nvoc_up_thunk_OBJENGSTATE_tmrIsPresent,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateIsPresent__ = &engstateIsPresent_IMPL,    // virtual
-    .vtable.__tmrServiceNotificationInterrupt__ = &__nvoc_up_thunk_IntrService_tmrServiceNotificationInterrupt,    // virtual inherited (intrserv) base (intrserv)
     .metadata__IntrService.vtable.__intrservServiceNotificationInterrupt__ = &intrservServiceNotificationInterrupt_IMPL,    // virtual
 };
 
@@ -141,13 +119,13 @@ const struct NVOC_CASTINFO __nvoc_castinfo__OBJTMR = {
 // 10 down-thunk(s) defined to bridge methods in OBJTMR from superclasses
 
 // tmrRegisterIntrService: virtual override (intrserv) base (intrserv)
-void __nvoc_down_thunk_OBJTMR_intrservRegisterIntrService(OBJGPU *pGpu, struct IntrService *pTmr, IntrServiceRecord pRecords[181]) {
-    tmrRegisterIntrService(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_IntrService)), pRecords);
+void __nvoc_down_thunk_OBJTMR_intrservRegisterIntrService(OBJGPU *pGpu, struct IntrService *pTmr, IntrServiceRecord pRecords[320]) {
+    tmrRegisterIntrService_IMPL(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_IntrService)), pRecords);
 }
 
 // tmrClearInterrupt: virtual override (intrserv) base (intrserv)
 NvBool __nvoc_down_thunk_OBJTMR_intrservClearInterrupt(OBJGPU *pGpu, struct IntrService *pTmr, IntrServiceClearInterruptArguments *pParams) {
-    return tmrClearInterrupt(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_IntrService)), pParams);
+    return tmrClearInterrupt_IMPL(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_IntrService)), pParams);
 }
 
 // tmrServiceInterrupt: virtual halified (4 hals) override (intrserv) base (intrserv) body
@@ -157,80 +135,37 @@ NvU32 __nvoc_down_thunk_OBJTMR_intrservServiceInterrupt(OBJGPU *pGpu, struct Int
 
 // tmrConstructEngine: virtual override (engstate) base (engstate)
 NV_STATUS __nvoc_down_thunk_OBJTMR_engstateConstructEngine(OBJGPU *pGpu, struct OBJENGSTATE *pTmr, ENGDESCRIPTOR arg3) {
-    return tmrConstructEngine(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)), arg3);
+    return tmrConstructEngine_IMPL(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)), arg3);
 }
 
 // tmrStatePreInitLocked: virtual override (engstate) base (engstate)
 NV_STATUS __nvoc_down_thunk_OBJTMR_engstateStatePreInitLocked(OBJGPU *pGpu, struct OBJENGSTATE *pTmr) {
-    return tmrStatePreInitLocked(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)));
+    return tmrStatePreInitLocked_IMPL(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)));
 }
 
 // tmrStateInitLocked: virtual override (engstate) base (engstate)
 NV_STATUS __nvoc_down_thunk_OBJTMR_engstateStateInitLocked(OBJGPU *pGpu, struct OBJENGSTATE *pTmr) {
-    return tmrStateInitLocked(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)));
+    return tmrStateInitLocked_IMPL(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)));
 }
 
 // tmrStateInitUnlocked: virtual override (engstate) base (engstate)
 NV_STATUS __nvoc_down_thunk_OBJTMR_engstateStateInitUnlocked(OBJGPU *pGpu, struct OBJENGSTATE *pTmr) {
-    return tmrStateInitUnlocked(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)));
+    return tmrStateInitUnlocked_IMPL(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)));
 }
 
 // tmrStateLoad: virtual override (engstate) base (engstate)
 NV_STATUS __nvoc_down_thunk_OBJTMR_engstateStateLoad(OBJGPU *pGpu, struct OBJENGSTATE *pTmr, NvU32 arg3) {
-    return tmrStateLoad(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)), arg3);
+    return tmrStateLoad_IMPL(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)), arg3);
 }
 
 // tmrStateUnload: virtual override (engstate) base (engstate)
 NV_STATUS __nvoc_down_thunk_OBJTMR_engstateStateUnload(OBJGPU *pGpu, struct OBJENGSTATE *pTmr, NvU32 arg3) {
-    return tmrStateUnload(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)), arg3);
+    return tmrStateUnload_IMPL(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)), arg3);
 }
 
 // tmrStateDestroy: virtual override (engstate) base (engstate)
 void __nvoc_down_thunk_OBJTMR_engstateStateDestroy(OBJGPU *pGpu, struct OBJENGSTATE *pTmr) {
-    tmrStateDestroy(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)));
-}
-
-
-// 8 up-thunk(s) defined to bridge methods in OBJTMR to superclasses
-
-// tmrInitMissing: virtual inherited (engstate) base (engstate)
-void __nvoc_up_thunk_OBJENGSTATE_tmrInitMissing(struct OBJGPU *pGpu, struct OBJTMR *pEngstate) {
-    engstateInitMissing(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)));
-}
-
-// tmrStatePreInitUnlocked: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_tmrStatePreInitUnlocked(struct OBJGPU *pGpu, struct OBJTMR *pEngstate) {
-    return engstateStatePreInitUnlocked(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)));
-}
-
-// tmrStatePreLoad: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_tmrStatePreLoad(struct OBJGPU *pGpu, struct OBJTMR *pEngstate, NvU32 arg3) {
-    return engstateStatePreLoad(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-// tmrStatePostLoad: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_tmrStatePostLoad(struct OBJGPU *pGpu, struct OBJTMR *pEngstate, NvU32 arg3) {
-    return engstateStatePostLoad(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-// tmrStatePreUnload: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_tmrStatePreUnload(struct OBJGPU *pGpu, struct OBJTMR *pEngstate, NvU32 arg3) {
-    return engstateStatePreUnload(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-// tmrStatePostUnload: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_tmrStatePostUnload(struct OBJGPU *pGpu, struct OBJTMR *pEngstate, NvU32 arg3) {
-    return engstateStatePostUnload(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-// tmrIsPresent: virtual inherited (engstate) base (engstate)
-NvBool __nvoc_up_thunk_OBJENGSTATE_tmrIsPresent(struct OBJGPU *pGpu, struct OBJTMR *pEngstate) {
-    return engstateIsPresent(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)));
-}
-
-// tmrServiceNotificationInterrupt: virtual inherited (intrserv) base (intrserv)
-NV_STATUS __nvoc_up_thunk_IntrService_tmrServiceNotificationInterrupt(OBJGPU *pGpu, struct OBJTMR *pIntrService, IntrServiceServiceNotificationInterruptArguments *pParams) {
-    return intrservServiceNotificationInterrupt(pGpu, (struct IntrService *)(((unsigned char *) pIntrService) + NV_OFFSETOF(OBJTMR, __nvoc_base_IntrService)), pParams);
+    tmrStateDestroy_IMPL(pGpu, (struct OBJTMR *)(((unsigned char *) pTmr) - NV_OFFSETOF(OBJTMR, __nvoc_base_OBJENGSTATE)));
 }
 
 
@@ -272,8 +207,8 @@ void __nvoc_init_dataField_OBJTMR(OBJTMR *pThis, GpuHalspecOwner *pGpuhalspecown
     PORT_UNREFERENCED_VARIABLE(rmVariantHal_HalVarIdx);
 
     // NVOC Property Hal field -- PDB_PROP_TMR_USE_COUNTDOWN_TIMER_FOR_RM_CALLBACKS
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbdf0ffe0UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: TU102 | TU104 | TU106 | TU116 | TU117 | GA100 | GA102 | GA103 | GA104 | GA106 | GA107 | AD102 | AD103 | AD104 | AD106 | AD107 | GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfdf0ffe0UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: TU102 | TU104 | TU106 | TU116 | TU117 | GA100 | GA102 | GA103 | GA104 | GA106 | GA107 | AD102 | AD103 | AD104 | AD106 | AD107 | GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->setProperty(pThis, PDB_PROP_TMR_USE_COUNTDOWN_TIMER_FOR_RM_CALLBACKS, NV_TRUE);
     }
@@ -284,8 +219,8 @@ void __nvoc_init_dataField_OBJTMR(OBJTMR *pThis, GpuHalspecOwner *pGpuhalspecown
     }
 
     // NVOC Property Hal field -- PDB_PROP_TMR_ALARM_INTR_REMOVED_FROM_PMC_TREE
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbdf0fc00UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GA100 | GA102 | GA103 | GA104 | GA106 | GA107 | AD102 | AD103 | AD104 | AD106 | AD107 | GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfdf0fc00UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GA100 | GA102 | GA103 | GA104 | GA106 | GA107 | AD102 | AD103 | AD104 | AD106 | AD107 | GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->setProperty(pThis, PDB_PROP_TMR_ALARM_INTR_REMOVED_FROM_PMC_TREE, NV_TRUE);
     }
@@ -302,7 +237,7 @@ void __nvoc_init_dataField_OBJTMR(OBJTMR *pThis, GpuHalspecOwner *pGpuhalspecown
     }
     else if (( ((rmVariantHal_HalVarIdx >> 5) == 0UL) && ((1UL << (rmVariantHal_HalVarIdx & 0x1f)) & 0x00000001UL) )) /* RmVariantHal: VF */ 
     {
-        if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+        if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
         {
             pThis->setProperty(pThis, PDB_PROP_TMR_USE_OS_TIMER_FOR_CALLBACKS, NV_TRUE);
         }
@@ -316,8 +251,8 @@ void __nvoc_init_dataField_OBJTMR(OBJTMR *pThis, GpuHalspecOwner *pGpuhalspecown
     pThis->setProperty(pThis, PDB_PROP_TMR_USE_POLLING_FOR_CALLBACKS, (0));
 
     // NVOC Property Hal field -- PDB_PROP_TMR_USE_SECOND_COUNTDOWN_TIMER_FOR_PVMRL
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->setProperty(pThis, PDB_PROP_TMR_USE_SECOND_COUNTDOWN_TIMER_FOR_PVMRL, NV_TRUE);
     }
@@ -328,8 +263,8 @@ void __nvoc_init_dataField_OBJTMR(OBJTMR *pThis, GpuHalspecOwner *pGpuhalspecown
     }
 
     // NVOC Property Hal field -- PDB_PROP_TMR_WAR_FOR_BUG_4679970_DEF
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->setProperty(pThis, PDB_PROP_TMR_WAR_FOR_BUG_4679970_DEF, NV_TRUE);
     }
@@ -382,7 +317,7 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     // tmrDelay -- halified (3 hals)
     if (( ((rmVariantHal_HalVarIdx >> 5) == 0UL) && ((1UL << (rmVariantHal_HalVarIdx & 0x1f)) & 0x00000001UL) )) /* RmVariantHal: VF */ 
     {
-        if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+        if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
         {
             pThis->__tmrDelay__ = &tmrDelay_OSTIMER;
         }
@@ -399,7 +334,7 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     // tmrServiceInterrupt -- virtual halified (4 hals) override (intrserv) base (intrserv) body
     if (( ((rmVariantHal_HalVarIdx >> 5) == 0UL) && ((1UL << (rmVariantHal_HalVarIdx & 0x1f)) & 0x00000001UL) )) /* RmVariantHal: VF */ 
     {
-        if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+        if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
         {
             pThis->__tmrServiceInterrupt__ = &tmrServiceInterrupt_395e98;
         }
@@ -424,18 +359,18 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     }
     else
     {
-        if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+        if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
         {
             pThis->__tmrSetCurrentTime__ = &tmrSetCurrentTime_395e98;
-        }
-        else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x20000000UL) ) ||
-                 ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000000c0UL) )) /* ChipHal: GB10B | GB20B | GB20C */ 
-        {
-            pThis->__tmrSetCurrentTime__ = &tmrSetCurrentTime_GB10B;
         }
         else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x01f0ffe0UL) )) /* ChipHal: TU102 | TU104 | TU106 | TU116 | TU117 | GA100 | GA102 | GA103 | GA104 | GA106 | GA107 | AD102 | AD103 | AD104 | AD106 | AD107 */ 
         {
             pThis->__tmrSetCurrentTime__ = &tmrSetCurrentTime_GV100;
+        }
+        else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x60000000UL) ) ||
+                 ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000000c0UL) )) /* ChipHal: GB10B | GB10C | GB20B | GB20C */ 
+        {
+            pThis->__tmrSetCurrentTime__ = &tmrSetCurrentTime_GB10B;
         }
         else
         {
@@ -444,7 +379,7 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     }
 
     // tmrGetTimeLo -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__tmrGetTimeLo__ = &tmrGetTimeLo_OSTIMER;
     }
@@ -454,7 +389,7 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     }
 
     // tmrGetTime -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__tmrGetTime__ = &tmrGetTime_OSTIMER;
     }
@@ -468,8 +403,8 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     {
         pThis->__tmrGetNsecShiftMask__ = &tmrGetNsecShiftMask_GM107;
     }
-    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__tmrGetNsecShiftMask__ = &tmrGetNsecShiftMask_GB100;
     }
@@ -480,7 +415,7 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     }
 
     // tmrGetTimeEx -- halified (3 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__tmrGetTimeEx__ = &tmrGetTimeEx_OSTIMER;
     }
@@ -494,7 +429,7 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     }
 
     // tmrReadTimeLoReg -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__tmrReadTimeLoReg__ = &tmrReadTimeLoReg_T234D;
     }
@@ -504,7 +439,7 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     }
 
     // tmrReadTimeHiReg -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__tmrReadTimeHiReg__ = &tmrReadTimeHiReg_T234D;
     }
@@ -514,7 +449,7 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     }
 
     // tmrGetGpuPtimerOffset -- halified (3 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__tmrGetGpuPtimerOffset__ = &tmrGetGpuPtimerOffset_395e98;
     }
@@ -528,8 +463,8 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     }
 
     // tmrGetPtimerOffsetNs -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x20000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000000c0UL) )) /* ChipHal: GB10B | GB20B | GB20C */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x60000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000000c0UL) )) /* ChipHal: GB10B | GB10C | GB20B | GB20C */ 
     {
         pThis->__tmrGetPtimerOffsetNs__ = &tmrGetPtimerOffsetNs_GB10B;
     }
@@ -544,8 +479,8 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     {
         pThis->__tmrSetCountdownIntrDisable__ = &tmrSetCountdownIntrDisable_GM200;
     }
-    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__tmrSetCountdownIntrDisable__ = &tmrSetCountdownIntrDisable_ac1694;
     }
@@ -556,7 +491,7 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     }
 
     // tmrSetCountdownIntrEnable -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__tmrSetCountdownIntrEnable__ = &tmrSetCountdownIntrEnable_395e98;
     }
@@ -566,7 +501,7 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     }
 
     // tmrSetCountdownIntrReset -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__tmrSetCountdownIntrReset__ = &tmrSetCountdownIntrReset_395e98;
     }
@@ -576,7 +511,7 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     }
 
     // tmrSetCountdown -- halified (3 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__tmrSetCountdown__ = &tmrSetCountdown_395e98;
     }
@@ -590,7 +525,7 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     }
 
     // tmrGetTimerBar0MapInfo -- halified (3 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__tmrGetTimerBar0MapInfo__ = &tmrGetTimerBar0MapInfo_395e98;
     }
@@ -601,6 +536,16 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     else
     {
         pThis->__tmrGetTimerBar0MapInfo__ = &tmrGetTimerBar0MapInfo_GB100;
+    }
+
+    // tmrIsGrTickFreqChangeSupported -- halified (2 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x01f0ffe0UL) )) /* ChipHal: TU102 | TU104 | TU106 | TU116 | TU117 | GA100 | GA102 | GA103 | GA104 | GA106 | GA107 | AD102 | AD103 | AD104 | AD106 | AD107 */ 
+    {
+        pThis->__tmrIsGrTickFreqChangeSupported__ = &tmrIsGrTickFreqChangeSupported_e661f0;
+    }
+    else
+    {
+        pThis->__tmrIsGrTickFreqChangeSupported__ = &tmrIsGrTickFreqChangeSupported_d69453;
     }
 
     // tmrGrTickFreqChange -- halified (2 hals) body
@@ -614,7 +559,7 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     }
 
     // tmrGetGpuAndCpuTimestampPair -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__tmrGetGpuAndCpuTimestampPair__ = &tmrGetGpuAndCpuTimestampPair_OSTIMER;
     }
@@ -628,23 +573,23 @@ static void __nvoc_init_funcTable_OBJTMR_1(OBJTMR *pThis, GpuHalspecOwner *pGpuh
     {
         pThis->__tmrGetTmrBaseAddr__ = &tmrGetTmrBaseAddr_GM107;
     }
-    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__tmrGetTmrBaseAddr__ = &tmrGetTmrBaseAddr_GB100;
     }
     // default
     else
     {
-        pThis->__tmrGetTmrBaseAddr__ = &tmrGetTmrBaseAddr_474d46;
+        // NVOC_UNREACHABLE, NULL-initialized.
     }
-} // End __nvoc_init_funcTable_OBJTMR_1 with approximately 51 basic block(s).
+} // End __nvoc_init_funcTable_OBJTMR_1 with approximately 53 basic block(s).
 
 
-// Initialize vtable(s) for 36 virtual method(s).
+// Initialize vtable(s) for 20 virtual method(s).
 void __nvoc_init_funcTable_OBJTMR(OBJTMR *pThis, GpuHalspecOwner *pGpuhalspecowner, RmHalspecOwner *pRmhalspecowner) {
 
-    // Initialize vtable(s) with 19 per-object function pointer(s).
+    // Initialize vtable(s) with 20 per-object function pointer(s).
     __nvoc_init_funcTable_OBJTMR_1(pThis, pGpuhalspecowner, pRmhalspecowner);
 }
 

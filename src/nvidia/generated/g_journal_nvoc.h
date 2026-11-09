@@ -488,14 +488,14 @@ static inline RmRCCommonJournal_RECORD * rcdbAddRcDiagRec(struct OBJGPU *pGpu, s
 #define rcdbAddRcDiagRec(pGpu, pRcdb, arg3) rcdbAddRcDiagRec_IMPL(pGpu, pRcdb, arg3)
 #endif // __nvoc_journal_h_disabled
 
-RmRCCommonJournal_RECORD * rcdbAddRcDiagRecFromGsp_IMPL(struct OBJGPU *pGpu, struct OBJRCDB *pRcdb, RmRCCommonJournal_RECORD *arg3, RmRcDiag_RECORD *arg4);
+RmRCCommonJournal_RECORD * rcdbAddRcDiagRecFromGsp_IMPL(struct OBJGPU *pGpu, struct OBJRCDB *pRcdb, RmRCCommonJournal_RECORD *arg3, RmRcDiag_RECORD *arg4, NvU32 arg5, NvU32 arg6);
 #ifdef __nvoc_journal_h_disabled
-static inline RmRCCommonJournal_RECORD * rcdbAddRcDiagRecFromGsp(struct OBJGPU *pGpu, struct OBJRCDB *pRcdb, RmRCCommonJournal_RECORD *arg3, RmRcDiag_RECORD *arg4) {
+static inline RmRCCommonJournal_RECORD * rcdbAddRcDiagRecFromGsp(struct OBJGPU *pGpu, struct OBJRCDB *pRcdb, RmRCCommonJournal_RECORD *arg3, RmRcDiag_RECORD *arg4, NvU32 arg5, NvU32 arg6) {
     NV_ASSERT_FAILED_PRECOMP("OBJRCDB was disabled!");
     return NULL;
 }
 #else // __nvoc_journal_h_disabled
-#define rcdbAddRcDiagRecFromGsp(pGpu, pRcdb, arg3, arg4) rcdbAddRcDiagRecFromGsp_IMPL(pGpu, pRcdb, arg3, arg4)
+#define rcdbAddRcDiagRecFromGsp(pGpu, pRcdb, arg3, arg4, arg5, arg6) rcdbAddRcDiagRecFromGsp_IMPL(pGpu, pRcdb, arg3, arg4, arg5, arg6)
 #endif // __nvoc_journal_h_disabled
 
 NV_STATUS rcdbGetRcDiagRec_IMPL(struct OBJRCDB *pRcdb, NvU16 arg2, RmRCCommonJournal_RECORD **arg3, NvU32 arg4, NvU32 arg5);
@@ -541,6 +541,10 @@ void rcdbCleanupNocatGpuCache_IMPL(struct OBJGPU *pGpu);
 NV_STATUS rcdbAddRmDclMsg(void* msg, NvU16 size, const PRB_FIELD_DESC *fieldDesc);
 NV_STATUS rcdbAddRmEngDump(struct OBJGPU *pGpu, NvU32 component);
 NV_STATUS rcdbAddRmGpuDump(struct OBJGPU *pGpu);
+
+// Append a protobuf dump to pSysErrorInfo->pErrorList.
+NV_STATUS rcdbAddProtobufDump(struct OBJGPU *pGpu, NvU8 *pBuf, NvU32 bufLen);
+
 void rcdbSetCommonJournalRecord(struct OBJGPU *pGpu, PRmRCCommonJournal_RECORD pRec);
 void rcdbAddCrashedFalcon(struct Falcon *pFlcn);
 

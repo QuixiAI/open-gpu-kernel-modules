@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2016-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -167,14 +167,15 @@ MODULE_PARM_DESC(NvSwitchBlacklist, "NvSwitchBlacklist=uuid[,uuid...]");
 //   .ioctl, .poll and other background tasks.
 //
 //   The kernel guarantees that .close won't happen while .ioctl and .poll
-//   are going on and without successful .open one can't execute any file ops.
-//   This behavior guarantees correctness of the locking model.
+//   are going on for the same file. It does not serialize .close against
+//   operations on other fds for the same device, so .close must take
+//   nvswitch_dev.device_mutex before touching per-device state that is also
+//   accessed by those paths.
 //
-//   If .close is invoked and holding the lock which is also used by threaded
-//   tasks such as interrupt, driver will deadlock while trying to stop such
-//   tasks. For example, when threaded interrupts are enabled, free_irq() calls
-//   kthread_stop() to flush pending interrupt tasks. The locking model
-//   makes sure that such deadlock cases don't happen.
+//   Do not hold nvswitch_dev.device_mutex across operations that stop
+//   threaded tasks such as interrupt. For example, when threaded interrupts
+//   are enabled, free_irq() calls kthread_stop() to flush pending interrupt
+//   tasks. The locking model makes sure that such deadlock cases don't happen.
 //
 // Lock ordering:
 //   nvswitch.driver_mutex
@@ -259,7 +260,7 @@ struct file_operations ctl_fops =
 static int nvswitch_initialize_device_interrupt(NVSWITCH_DEV *nvswitch_dev);
 static void nvswitch_shutdown_device_interrupt(NVSWITCH_DEV *nvswitch_dev);
 static void nvswitch_load_bar_info(NVSWITCH_DEV *nvswitch_dev);
-static void nvswitch_task_dispatch(NVSWITCH_DEV *nvswitch_dev);
+static void nvswitch_task_dispatch(void *nvswitch_dev);
 
 static NvBool
 nvswitch_is_device_blacklisted
@@ -313,7 +314,7 @@ nvswitch_init_background_tasks
     NV_ATOMIC_SET(nvswitch_dev->task_q_ready, 1);
 
     nv_kthread_q_item_init(&nvswitch_dev->task_item,
-                           (nv_q_func_t) &nvswitch_task_dispatch,
+                           &nvswitch_task_dispatch,
                            nvswitch_dev);
 
     if (!nv_kthread_q_schedule_q_item(&nvswitch_dev->task_q,
@@ -677,7 +678,9 @@ nvswitch_device_release
 
     mutex_lock(&nvswitch.driver_mutex);
 
+    mutex_lock(&nvswitch_dev->device_mutex);
     nvswitch_lib_remove_client_events(nvswitch_dev->lib_device, (void *)private);
+    mutex_unlock(&nvswitch_dev->device_mutex);
 
     //
     // If there are no outstanding references and the device is marked
@@ -689,7 +692,7 @@ nvswitch_device_release
         kfree(nvswitch_dev);
     }
 
-    if (private->capability_fds.fabric_mgmt > 0)
+    if (private->capability_fds.fabric_mgmt >= 0)
     {
         nvlink_cap_release(private->capability_fds.fabric_mgmt);
         private->capability_fds.fabric_mgmt = -1;
@@ -955,6 +958,75 @@ nvswitch_ctl_check_version(NVSWITCH_CHECK_VERSION_PARAMS *p)
     return 0;
 }
 
+static int
+nvswitch_ctl_check_version_v2(NVSWITCH_CHECK_VERSION_V2_PARAMS *p)
+{
+    NvlStatus retval;
+    NvU32 i;
+    NvU32 u_major_len = 0, k_major_len = 0;
+
+    p->is_compatible = 0;
+    p->user.version[NVSWITCH_VERSION_STRING_LENGTH - 1] = '\0';
+
+    if (p->cmd != NVSWITCH_CHECK_VERSION_CMD_STRICT &&
+        p->cmd != NVSWITCH_CHECK_VERSION_CMD_RELAXED &&
+        p->cmd != NVSWITCH_CHECK_VERSION_CMD_QUERY)
+    {
+        return -EINVAL;
+    }
+
+    retval = nvswitch_lib_check_api_version(p->user.version, p->kernel.version,
+                                            NVSWITCH_VERSION_STRING_LENGTH);
+
+    if (p->cmd == NVSWITCH_CHECK_VERSION_CMD_QUERY)
+    {
+        return 0;
+    }
+
+    if (retval == NVL_SUCCESS)
+    {
+        p->is_compatible = 1;
+        return 0;
+    }
+
+    if (retval != -NVL_ERR_NOT_SUPPORTED)
+    {
+        return nvswitch_map_status(retval);
+    }
+
+    if (p->cmd == NVSWITCH_CHECK_VERSION_CMD_RELAXED)
+    {
+        for (i = 0; i < NVSWITCH_VERSION_STRING_LENGTH &&
+             p->user.version[i] != '\0' && p->user.version[i] != '.'; i++)
+        {
+            u_major_len++;
+        }
+        for (i = 0; i < NVSWITCH_VERSION_STRING_LENGTH &&
+             p->kernel.version[i] != '\0' && p->kernel.version[i] != '.'; i++)
+        {
+            k_major_len++;
+        }
+
+        if (u_major_len == k_major_len &&
+            strncmp(p->user.version, p->kernel.version, u_major_len) == 0)
+        {
+            p->is_compatible = 1;
+            printk(KERN_DEBUG "nvidia-nvswitch: Minor version mismatch "
+                   "tolerated (process: %s, pid: %d), kernel %s user %s\n",
+                   current->comm, task_pid_nr(current),
+                   p->kernel.version, p->user.version);
+            return 0;
+        }
+    }
+
+    printk(KERN_ERR "nvidia-nvswitch: Version mismatch (process: %s, pid: %d), "
+           "kernel version %s user version %s\n",
+           current->comm, task_pid_nr(current),
+           p->kernel.version, p->user.version);
+
+    return 0;
+}
+
 static void
 nvswitch_ctl_get_devices(NVSWITCH_GET_DEVICES_PARAMS *p)
 {
@@ -1051,6 +1123,14 @@ nvswitch_ctl_cmd_dispatch
             if (!rc)
             {
                 nvswitch_ctl_get_devices_v2(params);
+            }
+            break;
+        case CTRL_NVSWITCH_CHECK_VERSION_V2:
+            rc = NVSWITCH_CTL_CHECK_PARAMS(NVSWITCH_CHECK_VERSION_V2_PARAMS,
+                                           param_size);
+            if (!rc)
+            {
+                rc = nvswitch_ctl_check_version_v2(params);
             }
             break;
 
@@ -1208,9 +1288,10 @@ nvswitch_isr_thread
 static void
 nvswitch_task_dispatch
 (
-    NVSWITCH_DEV *nvswitch_dev
+    void *_nvswitch_dev
 )
 {
+    NVSWITCH_DEV *nvswitch_dev = _nvswitch_dev;
     NvU64 nsec;
     NvU64 timeout;
     NvS64 rc;
@@ -1820,19 +1901,13 @@ nvswitch_exit
 }
 
 //
-// Get current time in seconds.nanoseconds
+// Get current time in nanoseconds.
 // In this implementation, the time is monotonic time
 //
 NvU64
-nvswitch_os_get_platform_time
-(
-    void
-)
+nvswitch_os_get_platform_time(void)
 {
-    struct timespec64 ts;
-
-    ktime_get_raw_ts64(&ts);
-    return (NvU64) timespec64_to_ns(&ts);
+    return nv_ktime_get_raw_ns();
 }
 
 //
@@ -2590,6 +2665,11 @@ nvswitch_os_acquire_fabric_mgmt_cap
         return -NVL_BAD_ARGS;
     }
 
+    if (private_data->capability_fds.fabric_mgmt >= 0)
+    {
+        return -NVL_ERR_STATE_IN_USE;
+    }
+
     dup_fd = nvlink_cap_acquire((int)capDescriptor,
                                 NVLINK_CAP_FABRIC_MANAGEMENT);
     if (dup_fd < 0)
@@ -2609,9 +2689,15 @@ nvswitch_os_is_fabric_manager
 {
     nvswitch_file_private_t *private_data = (nvswitch_file_private_t *)osPrivate;
 
-    /* Make sure that fabric mgmt capbaility fd is valid */
     if ((private_data == NULL) ||
         (private_data->capability_fds.fabric_mgmt < 0))
+    {
+        return 0;
+    }
+
+    /* Make sure that fabric mgmt capability fd is still valid. */
+    if (nvlink_cap_validate(private_data->capability_fds.fabric_mgmt,
+                            NVLINK_CAP_FABRIC_MANAGEMENT) < 0)
     {
         return 0;
     }

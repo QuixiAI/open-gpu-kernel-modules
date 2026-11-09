@@ -112,7 +112,10 @@
 // renamed from PHYSMEM_END by commit afe789b7367a ("kaslr: rename physmem_end
 // and PHYSMEM_END to direct_map_physmem_end") in v6.12 in  which occurred after
 // the necessary redefinition of PHYSMEM_END for aarch64.
-    #if defined(NVCPU_AARCH64) && !defined(DIRECT_MAP_PHYSMEM_END)
+//
+// For riscv64 this is currently still broken in the kernel
+// Bug: 5986560
+    #if (defined(NVCPU_AARCH64) && !defined(DIRECT_MAP_PHYSMEM_END)) || defined(NVCPU_RISCV64)
         #define UVM_CAN_USE_DEVICE_PRIVATE_MEMREMAP_PAGES() 0
     #else
         #define UVM_CAN_USE_DEVICE_PRIVATE_MEMREMAP_PAGES() 1
@@ -122,6 +125,18 @@
         #define UVM_CAN_USE_MMU_NOTIFIERS() 1
     #else
         #define UVM_CAN_USE_MMU_NOTIFIERS() 0
+    #endif
+
+// Check that importers can provide an invalidate_mappings() callback to
+// determine that DMA-BUF API stability has been reached and whether to provide
+// importer support through UVM.
+//
+// This callback was previously called move_notify().
+    #if (defined(NV_DMA_BUF_ATTACH_OPS_HAS_INVALIDATE_MAPPINGS) || defined(NV_DMA_BUF_ATTACH_OPS_HAS_MOVE_NOTIFY)) && \
+        defined(NV_DMA_BUF_ATTACHMENT_HAS_PEER2PEER)
+        #define UVM_PROVIDES_DMA_BUF_IMPORTER() 1
+    #else
+        #define UVM_PROVIDES_DMA_BUF_IMPORTER() 0
     #endif
 
 //
@@ -137,10 +152,7 @@
 /* Return a nanosecond-precise value */
 static inline NvU64 NV_GETTIME(void)
 {
-    struct timespec64 tm;
-
-    ktime_get_raw_ts64(&tm);
-    return (NvU64) timespec64_to_ns(&tm);
+    return nv_ktime_get_raw_ns();
 }
 
 typedef struct
@@ -194,6 +206,12 @@ typedef struct
   #include <asm/pgtable.h>
   #include <asm/pgtable_types.h>
 #endif
+
+    #if NV_IS_EXPORT_SYMBOL_GPL_dma_iova_try_alloc
+        #define UVM_USE_DMA_IOVA_API() 1
+    #else
+        #define UVM_USE_DMA_IOVA_API() 0
+    #endif // NV_IS_EXPORT_SYMBOL_GPL_dma_iova_try_alloc
 
 // PAGE_KERNEL_NOENC is only defined on x86. Define it for all architectures so
 // we don't have to wrap uses in #ifdefs.

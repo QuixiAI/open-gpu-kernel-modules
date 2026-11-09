@@ -124,10 +124,14 @@ NvBool nvkms_output_rounding_fix(void);
 NvBool nvkms_disable_hdmi_frl(void);
 NvBool nvkms_disable_vrr_memclk_switch(void);
 NvBool nvkms_hdmi_deepcolor(void);
+NvU32 nvkms_max_output_color_bpc(void);
 NvBool nvkms_opportunistic_display_sync(void);
 enum NvKmsDebugForceColorSpace nvkms_debug_force_color_space(void);
 NvBool nvkms_enable_overlay_layers(void);
+NvBool nvkms_opportunistic_flip_sync(void);
 NvBool nvkms_debug_logging(void);
+void nvkms_extcon_report_hdmi(NvBool state);
+void nvkms_extcon_report_hdmi_audio(NvBool state);
 
 void   nvkms_call_rm    (void *ops);
 void*  nvkms_alloc      (size_t size,
@@ -164,12 +168,13 @@ NvBool nvkms_syncpt_op  (enum NvKmsSyncPtOp op,
 int    nvkms_snprintf   (char *str,
                          size_t size,
                          const char *format, ...)
-    __attribute__((format (printf, 3, 4)));
+    __attribute__((format (__printf__, 3, 4)));
 
 int    nvkms_vsnprintf  (char *str,
                          size_t size,
                          const char *format,
-                         va_list ap);
+                         va_list ap)
+    __attribute__((format (__printf__, 3, 0)));
 
 #define NVKMS_LOG_LEVEL_INFO  0
 #define NVKMS_LOG_LEVEL_WARN  1

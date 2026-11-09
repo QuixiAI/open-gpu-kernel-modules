@@ -16,7 +16,7 @@ extern "C" {
 #endif
 
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -48,6 +48,7 @@ extern "C" {
 #include "core/locks.h"
 #include "gpu/eng_state.h"
 #include "lib/ref_count.h"
+#include "containers/ringbuf.h"
 #include "gpu/timer/objtmr.h"
 #include "nvCpuUuid.h"
 #include "gpu/bus/kern_bus.h"
@@ -69,6 +70,8 @@ extern "C" {
 #include "nvlink_inband_msg.h"
 #include "kernel/gpu/nvlink/common_nvlink.h"
 #include "kernel/gpu/nvlink/bitvector_nvlink.h"
+
+#include "lib/protobuf/prb_util.h"
 
 #if defined(INCLUDE_NVLINK_LIB)
 
@@ -98,9 +101,11 @@ typedef struct _def_knvlink_conn_info
 #define NVLINK_VERSION_40     0x00000007
 #define NVLINK_VERSION_50     0x00000008
 #define NVLINK_VERSION_60     0x00000009
+#define NVLINK_VERSION_70     0x0000000A
+#define NVLINK_VERSION_80     0x0000000B
 
 // Maximum links the GPU NVLink SW can currently support
-#define NVLINK_MAX_LINKS_SW             36
+#define NVLINK_MAX_LINKS_SW             128
 
 // Maximum IOCTRLs supported in SW
 #define NVLINK_MAX_IOCTRLS_SW           3
@@ -124,6 +129,58 @@ typedef struct _def_knvlink_conn_info
 
 // Total recovery period allowed before aborting and triggering degradation - 30s
 #define NVLINK_UNCONTAINED_ERROR_ABORT_PERIOD_NS        30000000000
+
+// Extended recovery period allowed when BMSAI is enabled (NVLE link retrain) - 15m
+#define NVLINK_BMSAI_ERROR_ABORT_PERIOD_NS              900000000000
+
+// Total traffic quiesce period allowed before aborting and triggering degradation - 30s
+#define NVLINK_TRAFFIC_QUIESCE_ABORT_PERIOD_NS          30000000000
+
+/************ NVLink resiliency timing observability *************/
+#define KNVLINK_RESILIENCY_TIMING_LOG_MAX_ENTRIES       32U
+#define KNVLINK_RESILIENCY_TIMING_LOG_LG2_SIZE          5U
+#define KNVLINK_TRAFFIC_QUIESCE_ACTION_RETRY_COUNT_MAX (30U)
+
+
+typedef enum
+{
+    KNVLINK_RESILIENCY_TIMING_FLOW_INVALID = 0U,
+    KNVLINK_RESILIENCY_TIMING_FLOW_UNCONTAINED_ERROR_RECOVERY = 1U,
+    KNVLINK_RESILIENCY_TIMING_FLOW_TRAFFIC_QUIESCE = 2U
+} KNVLINK_RESILIENCY_TIMING_FLOW;
+
+typedef enum
+{
+    KNVLINK_RESILIENCY_TIMING_EVENT_INVALID = 0U,
+    KNVLINK_RESILIENCY_TIMING_EVENT_FLOW_ENTRY = 1U,
+    KNVLINK_RESILIENCY_TIMING_EVENT_WAITING_UVM_IDLE = 2U,
+    KNVLINK_RESILIENCY_TIMING_EVENT_QUIESCE_CHANNELS_DISABLED = 3U,
+    KNVLINK_RESILIENCY_TIMING_EVENT_QUIESCE_IDLE_CONFIRMED = 4U,
+    KNVLINK_RESILIENCY_TIMING_EVENT_QUIESCE_DONE_SENT_TO_LFM = 5U,
+    KNVLINK_RESILIENCY_TIMING_EVENT_RESUME_REQUEST_FROM_LFM = 6U,
+    KNVLINK_RESILIENCY_TIMING_EVENT_UVM_RESUME_REQUESTED = 7U,
+    KNVLINK_RESILIENCY_TIMING_EVENT_RESUME_DONE_SENT_TO_LFM = 8U,
+    KNVLINK_RESILIENCY_TIMING_EVENT_FLOW_SUCCESS = 9U,
+    KNVLINK_RESILIENCY_TIMING_EVENT_FLOW_TIMEOUT = 10U,
+    KNVLINK_RESILIENCY_TIMING_EVENT_FLOW_ABORT = 11U,
+    KNVLINK_RESILIENCY_TIMING_EVENT_FLOW_ERROR = 12U,
+    KNVLINK_RESILIENCY_TIMING_EVENT_RESUME_CHANNELS_ENABLED = 13U
+} KNVLINK_RESILIENCY_TIMING_EVENT;
+
+typedef struct
+{
+    NvU64 timestampNs;
+    NvU64 elapsedNs;
+    NvU64 timeoutNs;
+    NvU32 seqId;
+    NvU32 flow;
+    NvU32 event;
+    NvU32 status;
+    NvU32 quiesceState;
+    NvU32 uvmIdle;
+    NvU32 flags;
+} KNVLINK_RESILIENCY_TIMING_LOG_ENTRY;
+MAKE_RINGBUF_DYNAMIC(KNVLINK_RESILIENCY_TIMING_LOG_ENTRY, KNVLINK_RESILIENCY_TIMING_LOG_RINGBUF);
 
 /**********************************************************/
 
@@ -182,6 +239,12 @@ kNvlinkGetLinkMaskAsPrimitve
 
 #define KNVLINK_BITVECTOR_TO_MASK(pNvlink, mask, bits) \
         (NvU##bits)((bits == 32) ? ( NvU64_LO32(kNvlinkGetLinkMaskAsPrimitve(&pNvlink->mask))) : kNvlinkGetLinkMaskAsPrimitve(&pNvlink->mask))
+
+// Uncontained error abort period in nanoseconds
+#define KNVLINK_UNCONTAINED_ERROR_ABORT_PERIOD_NS 30000000000
+
+// Traffic quiesce abort period in nanoseconds
+#define KNVLINK_TRAFFIC_QUIESCE_ABORT_PERIOD_NS 30000000000
 
 //
 // Structure representing per link information
@@ -247,6 +310,17 @@ typedef enum _NVLINK_BW_MODE_STATUS
     NVLINK_BW_MODE_STATUS_ERROR_GENERIC = 0xFF
 } NVLINK_BW_MODE_STATUS;
 
+#define KNVLINK_GFM_STATE_CONNECTED     1
+#define KNVLINK_GFM_STATE_DISCONNECTED  2
+
+typedef void (*KNVLINK_GFM_ACTION_FN)(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
+
+typedef struct KNVLINK_GFM_STATE_ACTION
+{
+    NvU32                  gfmState;
+    KNVLINK_GFM_ACTION_FN  pAction;
+} KNVLINK_GFM_STATE_ACTION;
+
 /*!
  * KernelNvlink is a logical abstraction of the GPU Nvlink Engine. The
  * Public API of the Nvlink Engine is exposed through this object, and
@@ -264,10 +338,9 @@ typedef enum _NVLINK_BW_MODE_STATUS
 #endif
 
 
-// Metadata with per-class RTTI and vtable with ancestor(s)
+// Metadata with per-class RTTI with ancestor(s)
 struct NVOC_METADATA__KernelNvlink;
 struct NVOC_METADATA__OBJENGSTATE;
-struct NVOC_VTABLE__KernelNvlink;
 
 
 struct KernelNvlink {
@@ -286,7 +359,7 @@ struct KernelNvlink {
     struct OBJENGSTATE *__nvoc_pbase_OBJENGSTATE;    // engstate super
     struct KernelNvlink *__nvoc_pbase_KernelNvlink;    // knvlink
 
-    // Vtable with 48 per-object function pointers
+    // Vtable with 51 per-object function pointers
     NvBool (*__knvlinkIsPresent__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // virtual halified (2 hals) override (engstate) base (engstate) body
     NV_STATUS (*__knvlinkSetDirectConnectBaseAddress__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NV_STATUS (*__knvlinkSetUniqueFabricBaseAddress__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU64);  // halified (3 hals) body
@@ -314,29 +387,32 @@ struct KernelNvlink {
     NV_STATUS (*__knvlinkPostSetupNvlinkPeer__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NV_STATUS (*__knvlinkDiscoverPostRxDetLinks__)(struct OBJGPU *, struct KernelNvlink * /*this*/, struct OBJGPU *);  // halified (2 hals) body
     NV_STATUS (*__knvlinkLogAliDebugMessages__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvBool);  // halified (3 hals) body
-    void (*__knvlinkDumpCallbackRegister__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
+    void (*__knvlinkDumpCallbackRegister__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (3 hals) body
+    NV_STATUS (*__knvlinkSetPmgrLinkMask__)(struct OBJGPU *, struct KernelNvlink * /*this*/, union NVLINK_BIT_VECTOR *);  // halified (2 hals) body
     void (*__knvlinkGetEffectivePeerLinkMask__)(struct OBJGPU *, struct KernelNvlink * /*this*/, struct OBJGPU *, union NVLINK_BIT_VECTOR *);  // halified (3 hals) body
     NvU32 (*__knvlinkGetNumLinksToBeReducedPerIoctrl__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NvBool (*__knvlinkIsBandwidthModeOff__)(struct KernelNvlink * /*this*/);  // halified (2 hals) body
-    NvBool (*__knvlinkIsBwModeSupported__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU16);  // halified (3 hals) body
+    NvBool (*__knvlinkIsBwModeSupported__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU16);  // halified (4 hals) body
     NV_STATUS (*__knvlinkGetHshubSupportedRbmModes__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     void (*__knvlinkPostSchedulingEnableCallbackRegister__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NV_STATUS (*__knvlinkTriggerProbeRequest__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     void (*__knvlinkPostSchedulingEnableCallbackUnregister__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
-    NV_STATUS (*__knvlinkGetSupportedBwMode__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NV2080_CTRL_NVLINK_GET_SUPPORTED_BW_MODE_PARAMS *);  // halified (3 hals) body
-    NV_STATUS (*__knvlinkABMLinkMaskUpdate__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvBool);  // halified (2 hals) body
+    NV_STATUS (*__knvlinkGetSupportedBwMode__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NV2080_CTRL_NVLINK_GET_SUPPORTED_BW_MODE_PARAMS *);  // halified (4 hals) body
+    NV_STATUS (*__knvlinkABMLinkMaskUpdate__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvBool);  // halified (3 hals) body
+    NV_STATUS (*__knvlinkAbmFabricHealthMaskUpdate__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     void (*__knvlinkDirectConnectCheck__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NvBool (*__knvlinkIsGpuReducedNvlinkConfig__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NvBool (*__knvlinkIsFloorSweepingNeeded__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU32, NvU32);  // halified (2 hals) body
     void (*__knvlinkCoreGetDevicePciInfo__)(struct OBJGPU *, struct KernelNvlink * /*this*/, nvlink_device_info *);  // halified (2 hals) body
-    NV_STATUS (*__knvlinkGetSupportedCounters__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NV2080_CTRL_NVLINK_GET_SUPPORTED_COUNTERS_PARAMS *);  // halified (2 hals) body
     NvU32 (*__knvlinkGetSupportedCoreLinkStateMask__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (3 hals) body
     NV_STATUS (*__knvlinkGetEncryptionBits__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NvBool (*__knvlinkIsNvleEnabled__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NV_STATUS (*__knvlinkEncryptionGetUpdateGpuIdentifiers__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvBool);  // halified (2 hals) body
     NV_STATUS (*__knvlinkGetPlatformInfo__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
+    NV_STATUS (*__knvlinkSetupResiliencyCallbacks__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NVLINK_RESILIENCY_INFO *);  // halified (2 hals) body
+    void (*__knvlinkDestroyResiliencyCallbacks__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NVLINK_RESILIENCY_INFO *);  // halified (2 hals) body
 
-    // 22 PDB properties
+    // 30 PDB properties
 //  NvBool PDB_PROP_KNVLINK_IS_MISSING inherited from OBJENGSTATE
     NvBool PDB_PROP_KNVLINK_ENABLED;
     NvBool PDB_PROP_KNVLINK_L2_POWER_STATE_ENABLED;
@@ -357,8 +433,16 @@ struct KernelNvlink {
     NvBool PDB_PROP_KNVLINK_UNCONTAINED_ERROR_RECOVERY_SUPPORTED;
     NvBool PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC;
     NvBool PDB_PROP_KNVLINK_ENCRYPTION_ENABLED;
+    NvBool PDB_PROP_KNVLINK_SELECTIVE_ENCRYPTION_ENABLED;
+    NvBool PDB_PROP_KNVLINK_NVLE_READY;
+    NvBool PDB_PROP_KNVLINK_HANDLE_ALID_CLID_MAP_IN_RM;
     NvBool PDB_PROP_KNVLINK_RBM_LINK_COUNT_ENABLED;
     NvBool PDB_PROP_KNVLINK_UNILATERAL_LINK_STATE_CHANGE_SUPPORTED;
+    NvBool PDB_PROP_KNVLINK_ASYNC_RBM_SUPPORTED;
+    NvBool PDB_PROP_KNVLINK_RBM_RESTART_PROBES_AFTER_LINK_WAKE_TIMEOUT;
+    NvBool PDB_PROP_KNVLINK_P2P_CAPS_DIRECT_CONNECT;
+    NvBool PDB_PROP_KNVLINK_P2P_SKIP_SYMETRY_LINK_CHECK;
+    NvBool PDB_PROP_KNVLINK_PTC_CLOCK_SUPPORTED;
 
     // Data members
     struct KernelIoctrl *PRIVATE_FIELD(pKernelIoctrl)[3];
@@ -369,11 +453,10 @@ struct KernelNvlink {
     NvU32 PRIVATE_FIELD(registryControl);
     NvU32 PRIVATE_FIELD(minionControl);
     NvU32 PRIVATE_FIELD(verboseMask);
-    NV2080_CTRL_NVLINK_GET_SUPPORTED_COUNTERS_PARAMS PRIVATE_FIELD(supportedCounterMask);
     NvU32 *PRIVATE_FIELD(pLinkConnection);
     NvBool PRIVATE_FIELD(bChiplibConfig);
     NvBool PRIVATE_FIELD(bRegistryLinkOverride);
-    NvU64 PRIVATE_FIELD(registryLinkMask);
+    union NVLINK_BIT_VECTOR PRIVATE_FIELD(registryLinkMask);
     NvBool PRIVATE_FIELD(bOverrideComputePeerMode);
     union NVLINK_BIT_VECTOR PRIVATE_FIELD(discoveredLinks);
     union NVLINK_BIT_VECTOR PRIVATE_FIELD(vbiosDisabledLinkMask);
@@ -384,12 +467,14 @@ struct KernelNvlink {
     NvU32 PRIVATE_FIELD(bridgedLinks);
     union NVLINK_BIT_VECTOR PRIVATE_FIELD(enabledLinks);
     FaultUpList PRIVATE_FIELD(faultUpLinks);
-    NvU64 PRIVATE_FIELD(initializedLinks);
+    union NVLINK_BIT_VECTOR PRIVATE_FIELD(initializedLinks);
     NvU32 PRIVATE_FIELD(maxNumLinks);
-    KNVLINK_RM_LINK PRIVATE_FIELD(nvlinkLinks)[36];
+    NvU32 PRIVATE_FIELD(linksPerSpigot);
+    union NVLINK_BIT_VECTOR PRIVATE_FIELD(discoveredNvlpwMask);
+    KNVLINK_RM_LINK PRIVATE_FIELD(nvlinkLinks)[128];
     NvBool PRIVATE_FIELD(bIsGpuDegraded);
     union NVLINK_BIT_VECTOR PRIVATE_FIELD(postRxDetLinkMask);
-    NvU64 PRIVATE_FIELD(disconnectedLinkMask);
+    union NVLINK_BIT_VECTOR PRIVATE_FIELD(disconnectedLinkMask);
     NvU32 PRIVATE_FIELD(sysmemLinkMask);
     union NVLINK_BIT_VECTOR PRIVATE_FIELD(peerLinkMasks)[32];
     NvU32 PRIVATE_FIELD(forcedSysmemDeviceType);
@@ -411,25 +496,37 @@ struct KernelNvlink {
     NvBool PRIVATE_FIELD(bLinkTrainingDebugSpew);
     NvBool PRIVATE_FIELD(bDisableL2Mode);
     NvU32 PRIVATE_FIELD(nvlinkLinkSpeed);
-    NvU32 PRIVATE_FIELD(errorRecoveries)[36];
+    NvU32 PRIVATE_FIELD(errorRecoveries)[128];
     NvBool PRIVATE_FIELD(bNvswitchProxy);
     NvU64 PRIVATE_FIELD(fabricBaseAddr);
     NvU64 PRIVATE_FIELD(fabricEgmBaseAddr);
     NvU64 PRIVATE_FIELD(vidmemDirectConnectBaseAddr);
     NVLINK_BW_MODE_STATUS PRIVATE_FIELD(bwModeStatus);
-    _Atomic(NvU8) PRIVATE_FIELD(nvlinkBwMode);
+    _Atomic(NvU16) PRIVATE_FIELD(nvlinkBwMode);
     _Atomic(NvU64) PRIVATE_FIELD(nvlinkBwModeEpoch);
     NvU16 PRIVATE_FIELD(maxRbmLinks);
-    NvU16 PRIVATE_FIELD(hshubSupportedRbmModesList)[36];
+    NvU16 PRIVATE_FIELD(hshubSupportedRbmModesList)[128];
     NvU8 PRIVATE_FIELD(totalRbmModes);
     NvBool PRIVATE_FIELD(bAbmEnabled);
+    NvBool PRIVATE_FIELD(bTrafficQuiesceEnable);
+    NvBool PRIVATE_FIELD(bDisableNonDisruptiveLinkMask);
     union NVLINK_BIT_VECTOR PRIVATE_FIELD(pendingAbmLinkMaskToBeReduced);
     NvBool PRIVATE_FIELD(bAsyncRbmEnabled);
+    struct TMR_EVENT *PRIVATE_FIELD(pFabricHealthMaskTmrEvent);
     NvU32 PRIVATE_FIELD(probeRequestTimeMs);
     NvU32 PRIVATE_FIELD(linkStateChangeTimeMs);
+    NvU32 PRIVATE_FIELD(gpuAmapUpdateStatus);
+    NvU64 PRIVATE_FIELD(uncontainedErrorAbortTimeoutNs);
+    NvU64 PRIVATE_FIELD(trafficQuiesceAbortTimeoutNs);
+    _Atomic(NvU32) PRIVATE_FIELD(resiliencyTimingSeqCounter);
+    _Atomic(NvU32) PRIVATE_FIELD(uncontainedRecoverySeqId);
+    _Atomic(NvU32) PRIVATE_FIELD(trafficQuiesceSeqId);
+    _Atomic(NvU32) PRIVATE_FIELD(resiliencyTimingWriteCount);
+    KNVLINK_RESILIENCY_TIMING_LOG_RINGBUF PRIVATE_FIELD(resiliencyTimingLog);
     NvU32 PRIVATE_FIELD(gspProxyRegkeys);
     NvBool PRIVATE_FIELD(bMmuNvlinkEncryptEn);
     NvBool PRIVATE_FIELD(bNvlinkTlwEncryptEn);
+    NvBool PRIVATE_FIELD(bNvlinkTlwSelectiveEncryptionEn);
     NvU32 PRIVATE_FIELD(alid);
     NvU32 PRIVATE_FIELD(clid);
     NvBool PRIVATE_FIELD(bClidUpdated);
@@ -440,10 +537,11 @@ struct KernelNvlink {
     NvBool PRIVATE_FIELD(bRemapTableLockDisable);
     NvBool PRIVATE_FIELD(bNvleModeRegkey);
     NvBool PRIVATE_FIELD(bNvleQualModeRegkey);
-    NvBool PRIVATE_FIELD(bNvleKeySetup)[32];
+    NvBool PRIVATE_FIELD(bNvleKeySetup)[640];
     NvBool PRIVATE_FIELD(bNvleKeyRefreshEnabled);
     NvU32 PRIVATE_FIELD(nvleKeyRefreshInterval);
     NV2080_CTRL_NVLINK_GET_PLATFORM_INFO_PARAMS PRIVATE_FIELD(platformInfo);
+    NvBool PRIVATE_FIELD(bPtcInitialized);
 };
 
 
@@ -463,7 +561,7 @@ struct KernelNvlink_PRIVATE {
     struct OBJENGSTATE *__nvoc_pbase_OBJENGSTATE;    // engstate super
     struct KernelNvlink *__nvoc_pbase_KernelNvlink;    // knvlink
 
-    // Vtable with 48 per-object function pointers
+    // Vtable with 51 per-object function pointers
     NvBool (*__knvlinkIsPresent__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // virtual halified (2 hals) override (engstate) base (engstate) body
     NV_STATUS (*__knvlinkSetDirectConnectBaseAddress__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NV_STATUS (*__knvlinkSetUniqueFabricBaseAddress__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU64);  // halified (3 hals) body
@@ -491,29 +589,32 @@ struct KernelNvlink_PRIVATE {
     NV_STATUS (*__knvlinkPostSetupNvlinkPeer__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NV_STATUS (*__knvlinkDiscoverPostRxDetLinks__)(struct OBJGPU *, struct KernelNvlink * /*this*/, struct OBJGPU *);  // halified (2 hals) body
     NV_STATUS (*__knvlinkLogAliDebugMessages__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvBool);  // halified (3 hals) body
-    void (*__knvlinkDumpCallbackRegister__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
+    void (*__knvlinkDumpCallbackRegister__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (3 hals) body
+    NV_STATUS (*__knvlinkSetPmgrLinkMask__)(struct OBJGPU *, struct KernelNvlink * /*this*/, union NVLINK_BIT_VECTOR *);  // halified (2 hals) body
     void (*__knvlinkGetEffectivePeerLinkMask__)(struct OBJGPU *, struct KernelNvlink * /*this*/, struct OBJGPU *, union NVLINK_BIT_VECTOR *);  // halified (3 hals) body
     NvU32 (*__knvlinkGetNumLinksToBeReducedPerIoctrl__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NvBool (*__knvlinkIsBandwidthModeOff__)(struct KernelNvlink * /*this*/);  // halified (2 hals) body
-    NvBool (*__knvlinkIsBwModeSupported__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU16);  // halified (3 hals) body
+    NvBool (*__knvlinkIsBwModeSupported__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU16);  // halified (4 hals) body
     NV_STATUS (*__knvlinkGetHshubSupportedRbmModes__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     void (*__knvlinkPostSchedulingEnableCallbackRegister__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NV_STATUS (*__knvlinkTriggerProbeRequest__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     void (*__knvlinkPostSchedulingEnableCallbackUnregister__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
-    NV_STATUS (*__knvlinkGetSupportedBwMode__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NV2080_CTRL_NVLINK_GET_SUPPORTED_BW_MODE_PARAMS *);  // halified (3 hals) body
-    NV_STATUS (*__knvlinkABMLinkMaskUpdate__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvBool);  // halified (2 hals) body
+    NV_STATUS (*__knvlinkGetSupportedBwMode__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NV2080_CTRL_NVLINK_GET_SUPPORTED_BW_MODE_PARAMS *);  // halified (4 hals) body
+    NV_STATUS (*__knvlinkABMLinkMaskUpdate__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvBool);  // halified (3 hals) body
+    NV_STATUS (*__knvlinkAbmFabricHealthMaskUpdate__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     void (*__knvlinkDirectConnectCheck__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NvBool (*__knvlinkIsGpuReducedNvlinkConfig__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NvBool (*__knvlinkIsFloorSweepingNeeded__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU32, NvU32);  // halified (2 hals) body
     void (*__knvlinkCoreGetDevicePciInfo__)(struct OBJGPU *, struct KernelNvlink * /*this*/, nvlink_device_info *);  // halified (2 hals) body
-    NV_STATUS (*__knvlinkGetSupportedCounters__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NV2080_CTRL_NVLINK_GET_SUPPORTED_COUNTERS_PARAMS *);  // halified (2 hals) body
     NvU32 (*__knvlinkGetSupportedCoreLinkStateMask__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (3 hals) body
     NV_STATUS (*__knvlinkGetEncryptionBits__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NvBool (*__knvlinkIsNvleEnabled__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
     NV_STATUS (*__knvlinkEncryptionGetUpdateGpuIdentifiers__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvBool);  // halified (2 hals) body
     NV_STATUS (*__knvlinkGetPlatformInfo__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // halified (2 hals) body
+    NV_STATUS (*__knvlinkSetupResiliencyCallbacks__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NVLINK_RESILIENCY_INFO *);  // halified (2 hals) body
+    void (*__knvlinkDestroyResiliencyCallbacks__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NVLINK_RESILIENCY_INFO *);  // halified (2 hals) body
 
-    // 22 PDB properties
+    // 30 PDB properties
 //  NvBool PDB_PROP_KNVLINK_IS_MISSING inherited from OBJENGSTATE
     NvBool PDB_PROP_KNVLINK_ENABLED;
     NvBool PDB_PROP_KNVLINK_L2_POWER_STATE_ENABLED;
@@ -534,8 +635,16 @@ struct KernelNvlink_PRIVATE {
     NvBool PDB_PROP_KNVLINK_UNCONTAINED_ERROR_RECOVERY_SUPPORTED;
     NvBool PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC;
     NvBool PDB_PROP_KNVLINK_ENCRYPTION_ENABLED;
+    NvBool PDB_PROP_KNVLINK_SELECTIVE_ENCRYPTION_ENABLED;
+    NvBool PDB_PROP_KNVLINK_NVLE_READY;
+    NvBool PDB_PROP_KNVLINK_HANDLE_ALID_CLID_MAP_IN_RM;
     NvBool PDB_PROP_KNVLINK_RBM_LINK_COUNT_ENABLED;
     NvBool PDB_PROP_KNVLINK_UNILATERAL_LINK_STATE_CHANGE_SUPPORTED;
+    NvBool PDB_PROP_KNVLINK_ASYNC_RBM_SUPPORTED;
+    NvBool PDB_PROP_KNVLINK_RBM_RESTART_PROBES_AFTER_LINK_WAKE_TIMEOUT;
+    NvBool PDB_PROP_KNVLINK_P2P_CAPS_DIRECT_CONNECT;
+    NvBool PDB_PROP_KNVLINK_P2P_SKIP_SYMETRY_LINK_CHECK;
+    NvBool PDB_PROP_KNVLINK_PTC_CLOCK_SUPPORTED;
 
     // Data members
     struct KernelIoctrl *pKernelIoctrl[3];
@@ -546,11 +655,10 @@ struct KernelNvlink_PRIVATE {
     NvU32 registryControl;
     NvU32 minionControl;
     NvU32 verboseMask;
-    NV2080_CTRL_NVLINK_GET_SUPPORTED_COUNTERS_PARAMS supportedCounterMask;
     NvU32 *pLinkConnection;
     NvBool bChiplibConfig;
     NvBool bRegistryLinkOverride;
-    NvU64 registryLinkMask;
+    union NVLINK_BIT_VECTOR registryLinkMask;
     NvBool bOverrideComputePeerMode;
     union NVLINK_BIT_VECTOR discoveredLinks;
     union NVLINK_BIT_VECTOR vbiosDisabledLinkMask;
@@ -561,12 +669,14 @@ struct KernelNvlink_PRIVATE {
     NvU32 bridgedLinks;
     union NVLINK_BIT_VECTOR enabledLinks;
     FaultUpList faultUpLinks;
-    NvU64 initializedLinks;
+    union NVLINK_BIT_VECTOR initializedLinks;
     NvU32 maxNumLinks;
-    KNVLINK_RM_LINK nvlinkLinks[36];
+    NvU32 linksPerSpigot;
+    union NVLINK_BIT_VECTOR discoveredNvlpwMask;
+    KNVLINK_RM_LINK nvlinkLinks[128];
     NvBool bIsGpuDegraded;
     union NVLINK_BIT_VECTOR postRxDetLinkMask;
-    NvU64 disconnectedLinkMask;
+    union NVLINK_BIT_VECTOR disconnectedLinkMask;
     NvU32 sysmemLinkMask;
     union NVLINK_BIT_VECTOR peerLinkMasks[32];
     NvU32 forcedSysmemDeviceType;
@@ -588,25 +698,37 @@ struct KernelNvlink_PRIVATE {
     NvBool bLinkTrainingDebugSpew;
     NvBool bDisableL2Mode;
     NvU32 nvlinkLinkSpeed;
-    NvU32 errorRecoveries[36];
+    NvU32 errorRecoveries[128];
     NvBool bNvswitchProxy;
     NvU64 fabricBaseAddr;
     NvU64 fabricEgmBaseAddr;
     NvU64 vidmemDirectConnectBaseAddr;
     NVLINK_BW_MODE_STATUS bwModeStatus;
-    _Atomic(NvU8) nvlinkBwMode;
+    _Atomic(NvU16) nvlinkBwMode;
     _Atomic(NvU64) nvlinkBwModeEpoch;
     NvU16 maxRbmLinks;
-    NvU16 hshubSupportedRbmModesList[36];
+    NvU16 hshubSupportedRbmModesList[128];
     NvU8 totalRbmModes;
     NvBool bAbmEnabled;
+    NvBool bTrafficQuiesceEnable;
+    NvBool bDisableNonDisruptiveLinkMask;
     union NVLINK_BIT_VECTOR pendingAbmLinkMaskToBeReduced;
     NvBool bAsyncRbmEnabled;
+    struct TMR_EVENT *pFabricHealthMaskTmrEvent;
     NvU32 probeRequestTimeMs;
     NvU32 linkStateChangeTimeMs;
+    NvU32 gpuAmapUpdateStatus;
+    NvU64 uncontainedErrorAbortTimeoutNs;
+    NvU64 trafficQuiesceAbortTimeoutNs;
+    _Atomic(NvU32) resiliencyTimingSeqCounter;
+    _Atomic(NvU32) uncontainedRecoverySeqId;
+    _Atomic(NvU32) trafficQuiesceSeqId;
+    _Atomic(NvU32) resiliencyTimingWriteCount;
+    KNVLINK_RESILIENCY_TIMING_LOG_RINGBUF resiliencyTimingLog;
     NvU32 gspProxyRegkeys;
     NvBool bMmuNvlinkEncryptEn;
     NvBool bNvlinkTlwEncryptEn;
+    NvBool bNvlinkTlwSelectiveEncryptionEn;
     NvU32 alid;
     NvU32 clid;
     NvBool bClidUpdated;
@@ -617,35 +739,18 @@ struct KernelNvlink_PRIVATE {
     NvBool bRemapTableLockDisable;
     NvBool bNvleModeRegkey;
     NvBool bNvleQualModeRegkey;
-    NvBool bNvleKeySetup[32];
+    NvBool bNvleKeySetup[640];
     NvBool bNvleKeyRefreshEnabled;
     NvU32 nvleKeyRefreshInterval;
     NV2080_CTRL_NVLINK_GET_PLATFORM_INFO_PARAMS platformInfo;
+    NvBool bPtcInitialized;
 };
 
 
-// Vtable with 13 per-class function pointers
-struct NVOC_VTABLE__KernelNvlink {
-    NV_STATUS (*__knvlinkConstructEngine__)(struct OBJGPU *, struct KernelNvlink * /*this*/, ENGDESCRIPTOR);  // virtual override (engstate) base (engstate)
-    NV_STATUS (*__knvlinkStatePreInitLocked__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // virtual override (engstate) base (engstate)
-    NV_STATUS (*__knvlinkStateLoad__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU32);  // virtual override (engstate) base (engstate)
-    NV_STATUS (*__knvlinkStatePostLoad__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU32);  // virtual override (engstate) base (engstate)
-    NV_STATUS (*__knvlinkStateUnload__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU32);  // virtual override (engstate) base (engstate)
-    NV_STATUS (*__knvlinkStatePostUnload__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU32);  // virtual override (engstate) base (engstate)
-    void (*__knvlinkInitMissing__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // virtual inherited (engstate) base (engstate)
-    NV_STATUS (*__knvlinkStatePreInitUnlocked__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // virtual inherited (engstate) base (engstate)
-    NV_STATUS (*__knvlinkStateInitLocked__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // virtual inherited (engstate) base (engstate)
-    NV_STATUS (*__knvlinkStateInitUnlocked__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // virtual inherited (engstate) base (engstate)
-    NV_STATUS (*__knvlinkStatePreLoad__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU32);  // virtual inherited (engstate) base (engstate)
-    NV_STATUS (*__knvlinkStatePreUnload__)(struct OBJGPU *, struct KernelNvlink * /*this*/, NvU32);  // virtual inherited (engstate) base (engstate)
-    void (*__knvlinkStateDestroy__)(struct OBJGPU *, struct KernelNvlink * /*this*/);  // virtual inherited (engstate) base (engstate)
-};
-
-// Metadata with per-class RTTI and vtable with ancestor(s)
+// Metadata with per-class RTTI with ancestor(s)
 struct NVOC_METADATA__KernelNvlink {
     const struct NVOC_RTTI rtti;
     const struct NVOC_METADATA__OBJENGSTATE metadata__OBJENGSTATE;
-    const struct NVOC_VTABLE__KernelNvlink vtable;
 };
 
 #ifndef __nvoc_class_id_KernelNvlink
@@ -707,10 +812,26 @@ extern const struct NVOC_CLASS_DEF __nvoc_class_def_KernelNvlink;
 #define PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC_BASE_NAME PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC
 #define PDB_PROP_KNVLINK_ENCRYPTION_ENABLED_BASE_CAST
 #define PDB_PROP_KNVLINK_ENCRYPTION_ENABLED_BASE_NAME PDB_PROP_KNVLINK_ENCRYPTION_ENABLED
+#define PDB_PROP_KNVLINK_SELECTIVE_ENCRYPTION_ENABLED_BASE_CAST
+#define PDB_PROP_KNVLINK_SELECTIVE_ENCRYPTION_ENABLED_BASE_NAME PDB_PROP_KNVLINK_SELECTIVE_ENCRYPTION_ENABLED
+#define PDB_PROP_KNVLINK_NVLE_READY_BASE_CAST
+#define PDB_PROP_KNVLINK_NVLE_READY_BASE_NAME PDB_PROP_KNVLINK_NVLE_READY
+#define PDB_PROP_KNVLINK_HANDLE_ALID_CLID_MAP_IN_RM_BASE_CAST
+#define PDB_PROP_KNVLINK_HANDLE_ALID_CLID_MAP_IN_RM_BASE_NAME PDB_PROP_KNVLINK_HANDLE_ALID_CLID_MAP_IN_RM
 #define PDB_PROP_KNVLINK_RBM_LINK_COUNT_ENABLED_BASE_CAST
 #define PDB_PROP_KNVLINK_RBM_LINK_COUNT_ENABLED_BASE_NAME PDB_PROP_KNVLINK_RBM_LINK_COUNT_ENABLED
 #define PDB_PROP_KNVLINK_UNILATERAL_LINK_STATE_CHANGE_SUPPORTED_BASE_CAST
 #define PDB_PROP_KNVLINK_UNILATERAL_LINK_STATE_CHANGE_SUPPORTED_BASE_NAME PDB_PROP_KNVLINK_UNILATERAL_LINK_STATE_CHANGE_SUPPORTED
+#define PDB_PROP_KNVLINK_ASYNC_RBM_SUPPORTED_BASE_CAST
+#define PDB_PROP_KNVLINK_ASYNC_RBM_SUPPORTED_BASE_NAME PDB_PROP_KNVLINK_ASYNC_RBM_SUPPORTED
+#define PDB_PROP_KNVLINK_RBM_RESTART_PROBES_AFTER_LINK_WAKE_TIMEOUT_BASE_CAST
+#define PDB_PROP_KNVLINK_RBM_RESTART_PROBES_AFTER_LINK_WAKE_TIMEOUT_BASE_NAME PDB_PROP_KNVLINK_RBM_RESTART_PROBES_AFTER_LINK_WAKE_TIMEOUT
+#define PDB_PROP_KNVLINK_P2P_CAPS_DIRECT_CONNECT_BASE_CAST
+#define PDB_PROP_KNVLINK_P2P_CAPS_DIRECT_CONNECT_BASE_NAME PDB_PROP_KNVLINK_P2P_CAPS_DIRECT_CONNECT
+#define PDB_PROP_KNVLINK_P2P_SKIP_SYMETRY_LINK_CHECK_BASE_CAST
+#define PDB_PROP_KNVLINK_P2P_SKIP_SYMETRY_LINK_CHECK_BASE_NAME PDB_PROP_KNVLINK_P2P_SKIP_SYMETRY_LINK_CHECK
+#define PDB_PROP_KNVLINK_PTC_CLOCK_SUPPORTED_BASE_CAST
+#define PDB_PROP_KNVLINK_PTC_CLOCK_SUPPORTED_BASE_NAME PDB_PROP_KNVLINK_PTC_CLOCK_SUPPORTED
 
 
 NV_STATUS __nvoc_objCreateDynamic_KernelNvlink(Dynamic**, Dynamic*, NvU32, va_list);
@@ -891,6 +1012,15 @@ static inline NvBool knvlinkGetDegradedMode(struct OBJGPU *pGpu, struct KernelNv
 #define knvlinkGetDegradedMode(pGpu, pKernelNvlink) knvlinkGetDegradedMode_IMPL(pGpu, pKernelNvlink)
 #endif // __nvoc_kernel_nvlink_h_disabled
 
+void knvlinkHandleGfmStateChange_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 gfmState);
+#ifdef __nvoc_kernel_nvlink_h_disabled
+static inline void knvlinkHandleGfmStateChange(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 gfmState) {
+    NV_ASSERT_FAILED_PRECOMP("KernelNvlink was disabled!");
+}
+#else // __nvoc_kernel_nvlink_h_disabled
+#define knvlinkHandleGfmStateChange(pGpu, pKernelNvlink, gfmState) knvlinkHandleGfmStateChange_IMPL(pGpu, pKernelNvlink, gfmState)
+#endif // __nvoc_kernel_nvlink_h_disabled
+
 NvBool knvlinkIsUncontainedErrorRecoveryActive_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
 #ifdef __nvoc_kernel_nvlink_h_disabled
 static inline NvBool knvlinkIsUncontainedErrorRecoveryActive(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
@@ -899,6 +1029,15 @@ static inline NvBool knvlinkIsUncontainedErrorRecoveryActive(struct OBJGPU *pGpu
 }
 #else // __nvoc_kernel_nvlink_h_disabled
 #define knvlinkIsUncontainedErrorRecoveryActive(pGpu, pKernelNvlink) knvlinkIsUncontainedErrorRecoveryActive_IMPL(pGpu, pKernelNvlink)
+#endif // __nvoc_kernel_nvlink_h_disabled
+
+void knvlinkNvleRekeyRelease_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
+#ifdef __nvoc_kernel_nvlink_h_disabled
+static inline void knvlinkNvleRekeyRelease(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
+    NV_ASSERT_FAILED_PRECOMP("KernelNvlink was disabled!");
+}
+#else // __nvoc_kernel_nvlink_h_disabled
+#define knvlinkNvleRekeyRelease(pGpu, pKernelNvlink) knvlinkNvleRekeyRelease_IMPL(pGpu, pKernelNvlink)
 #endif // __nvoc_kernel_nvlink_h_disabled
 
 NV_STATUS knvlinkCoreRemoveLink_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 arg3);
@@ -1041,6 +1180,16 @@ static inline union NVLINK_BIT_VECTOR * knvlinkGetDiscoveredLinkMask(struct OBJG
 #define knvlinkGetDiscoveredLinkMask(pGpu, arg_this) knvlinkGetDiscoveredLinkMask_IMPL(pGpu, arg_this)
 #endif // __nvoc_kernel_nvlink_h_disabled
 
+NV_STATUS knvlinkCheckLinksAreActive_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
+#ifdef __nvoc_kernel_nvlink_h_disabled
+static inline NV_STATUS knvlinkCheckLinksAreActive(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
+    NV_ASSERT_FAILED_PRECOMP("KernelNvlink was disabled!");
+    return NV_ERR_NOT_SUPPORTED;
+}
+#else // __nvoc_kernel_nvlink_h_disabled
+#define knvlinkCheckLinksAreActive(pGpu, pKernelNvlink) knvlinkCheckLinksAreActive_IMPL(pGpu, pKernelNvlink)
+#endif // __nvoc_kernel_nvlink_h_disabled
+
 NV_STATUS knvlinkProcessInitDisabledLinks_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
 #ifdef __nvoc_kernel_nvlink_h_disabled
 static inline NV_STATUS knvlinkProcessInitDisabledLinks(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
@@ -1149,6 +1298,26 @@ static inline NV_STATUS knvlinkFatalErrorRecovery(struct OBJGPU *pGpu, struct Ke
 }
 #else // __nvoc_kernel_nvlink_h_disabled
 #define knvlinkFatalErrorRecovery(pGpu, pKernelNvLink, bRecoverable, bLazy) knvlinkFatalErrorRecovery_IMPL(pGpu, pKernelNvLink, bRecoverable, bLazy)
+#endif // __nvoc_kernel_nvlink_h_disabled
+
+NV_STATUS knvlinkTrafficQuiesceAction_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvLink, NvU32 action);
+#ifdef __nvoc_kernel_nvlink_h_disabled
+static inline NV_STATUS knvlinkTrafficQuiesceAction(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvLink, NvU32 action) {
+    NV_ASSERT_FAILED_PRECOMP("KernelNvlink was disabled!");
+    return NV_ERR_NOT_SUPPORTED;
+}
+#else // __nvoc_kernel_nvlink_h_disabled
+#define knvlinkTrafficQuiesceAction(pGpu, pKernelNvLink, action) knvlinkTrafficQuiesceAction_IMPL(pGpu, pKernelNvLink, action)
+#endif // __nvoc_kernel_nvlink_h_disabled
+
+NV_STATUS knvlinkResiliencyEntryFunction_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NVLINK_RESILIENCY_INFO *pInfo, NvBool bUncontainedErrorRecovery, NvBool bTrafficQuiesceResiliencyFlow);
+#ifdef __nvoc_kernel_nvlink_h_disabled
+static inline NV_STATUS knvlinkResiliencyEntryFunction(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NVLINK_RESILIENCY_INFO *pInfo, NvBool bUncontainedErrorRecovery, NvBool bTrafficQuiesceResiliencyFlow) {
+    NV_ASSERT_FAILED_PRECOMP("KernelNvlink was disabled!");
+    return NV_ERR_NOT_SUPPORTED;
+}
+#else // __nvoc_kernel_nvlink_h_disabled
+#define knvlinkResiliencyEntryFunction(pGpu, pKernelNvlink, pInfo, bUncontainedErrorRecovery, bTrafficQuiesceResiliencyFlow) knvlinkResiliencyEntryFunction_IMPL(pGpu, pKernelNvlink, pInfo, bUncontainedErrorRecovery, bTrafficQuiesceResiliencyFlow)
 #endif // __nvoc_kernel_nvlink_h_disabled
 
 NV_STATUS knvlinkSendInbandData_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NV2080_CTRL_NVLINK_INBAND_SEND_DATA_PARAMS *pParams);
@@ -1299,6 +1468,16 @@ static inline NV_STATUS knvlinkSetUniqueFlaBaseAddress(struct OBJGPU *pGpu, stru
 #define knvlinkSetUniqueFlaBaseAddress(pGpu, pKernelNvlink, arg3) knvlinkSetUniqueFlaBaseAddress_IMPL(pGpu, pKernelNvlink, arg3)
 #endif // __nvoc_kernel_nvlink_h_disabled
 
+NV_STATUS knvlinkSetAmapUpdateStatus_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU8 arg3, NvU8 arg4, NvU8 arg5);
+#ifdef __nvoc_kernel_nvlink_h_disabled
+static inline NV_STATUS knvlinkSetAmapUpdateStatus(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU8 arg3, NvU8 arg4, NvU8 arg5) {
+    NV_ASSERT_FAILED_PRECOMP("KernelNvlink was disabled!");
+    return NV_ERR_NOT_SUPPORTED;
+}
+#else // __nvoc_kernel_nvlink_h_disabled
+#define knvlinkSetAmapUpdateStatus(pGpu, pKernelNvlink, arg3, arg4, arg5) knvlinkSetAmapUpdateStatus_IMPL(pGpu, pKernelNvlink, arg3, arg4, arg5)
+#endif // __nvoc_kernel_nvlink_h_disabled
+
 NV_STATUS knvlinkFloorSweep_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 numLinksPerIp, NvU32 *pNumActiveLinks);
 #ifdef __nvoc_kernel_nvlink_h_disabled
 static inline NV_STATUS knvlinkFloorSweep(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 numLinksPerIp, NvU32 *pNumActiveLinks) {
@@ -1326,6 +1505,16 @@ static inline void knvlinkSetBWModeEpoch(struct OBJGPU *pGpu, struct KernelNvlin
 }
 #else // __nvoc_kernel_nvlink_h_disabled
 #define knvlinkSetBWModeEpoch(pGpu, pKernelNvlink, bwModeEpoch) knvlinkSetBWModeEpoch_IMPL(pGpu, pKernelNvlink, bwModeEpoch)
+#endif // __nvoc_kernel_nvlink_h_disabled
+
+NvBool knvlinkIsNvleStandaloneModeEnabled_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
+#ifdef __nvoc_kernel_nvlink_h_disabled
+static inline NvBool knvlinkIsNvleStandaloneModeEnabled(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
+    NV_ASSERT_FAILED_PRECOMP("KernelNvlink was disabled!");
+    return NV_FALSE;
+}
+#else // __nvoc_kernel_nvlink_h_disabled
+#define knvlinkIsNvleStandaloneModeEnabled(pGpu, pKernelNvlink) knvlinkIsNvleStandaloneModeEnabled_IMPL(pGpu, pKernelNvlink)
 #endif // __nvoc_kernel_nvlink_h_disabled
 
 NvU32 knvlinkGetNumActiveLinksPerIoctrl_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
@@ -1356,6 +1545,24 @@ static inline NvBool knvlinkIsP2PActive(struct OBJGPU *pGpu, struct KernelNvlink
 }
 #else // __nvoc_kernel_nvlink_h_disabled
 #define knvlinkIsP2PActive(pGpu, pKernelNvlink) knvlinkIsP2PActive_IMPL(pGpu, pKernelNvlink)
+#endif // __nvoc_kernel_nvlink_h_disabled
+
+#ifdef __nvoc_kernel_nvlink_h_disabled
+static inline NV_STATUS knvlinkInitializeAlidAndPtc(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
+    NV_ASSERT_FAILED_PRECOMP("KernelNvlink was disabled!");
+    return NV_ERR_NOT_SUPPORTED;
+}
+#else // __nvoc_kernel_nvlink_h_disabled
+#define knvlinkInitializeAlidAndPtc(pGpu, pKernelNvlink) knvlinkInitializeAlidAndPtc_ac1694(pGpu, pKernelNvlink)
+#endif // __nvoc_kernel_nvlink_h_disabled
+
+#ifdef __nvoc_kernel_nvlink_h_disabled
+static inline NV_STATUS knvlinkUninitializePtc(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
+    NV_ASSERT_FAILED_PRECOMP("KernelNvlink was disabled!");
+    return NV_ERR_NOT_SUPPORTED;
+}
+#else // __nvoc_kernel_nvlink_h_disabled
+#define knvlinkUninitializePtc(pGpu, pKernelNvlink) knvlinkUninitializePtc_ac1694(pGpu, pKernelNvlink)
 #endif // __nvoc_kernel_nvlink_h_disabled
 
 NV_STATUS knvlinkSetupEncryptionKeys_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *KernelNvlink, NvU32 localGpuAlid, NvU32 remoteGpuAlid, NV2080_CTRL_NVLINK_GET_PLATFORM_INFO_PARAMS *pLocalGpuPlatformInfo, NV2080_CTRL_NVLINK_GET_PLATFORM_INFO_PARAMS *pRemoteGpuPlatformInfo, NvU8 *pNvleKey);
@@ -1478,17 +1685,17 @@ static inline NvBool knvlinkIsNvleAlidPresent(struct OBJGPU *pGpu, struct Kernel
 
 
 // Wrapper macros for halified functions
-#define knvlinkConstructEngine_FNPTR(arg_this) arg_this->__nvoc_metadata_ptr->vtable.__knvlinkConstructEngine__
+#define knvlinkConstructEngine_FNPTR(arg_this) arg_this->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateConstructEngine__
 #define knvlinkConstructEngine(arg1, arg_this, arg3) knvlinkConstructEngine_DISPATCH(arg1, arg_this, arg3)
-#define knvlinkStatePreInitLocked_FNPTR(arg_this) arg_this->__nvoc_metadata_ptr->vtable.__knvlinkStatePreInitLocked__
+#define knvlinkStatePreInitLocked_FNPTR(arg_this) arg_this->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStatePreInitLocked__
 #define knvlinkStatePreInitLocked(arg1, arg_this) knvlinkStatePreInitLocked_DISPATCH(arg1, arg_this)
-#define knvlinkStateLoad_FNPTR(arg_this) arg_this->__nvoc_metadata_ptr->vtable.__knvlinkStateLoad__
+#define knvlinkStateLoad_FNPTR(arg_this) arg_this->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStateLoad__
 #define knvlinkStateLoad(arg1, arg_this, arg3) knvlinkStateLoad_DISPATCH(arg1, arg_this, arg3)
-#define knvlinkStatePostLoad_FNPTR(arg_this) arg_this->__nvoc_metadata_ptr->vtable.__knvlinkStatePostLoad__
+#define knvlinkStatePostLoad_FNPTR(arg_this) arg_this->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStatePostLoad__
 #define knvlinkStatePostLoad(arg1, arg_this, arg3) knvlinkStatePostLoad_DISPATCH(arg1, arg_this, arg3)
-#define knvlinkStateUnload_FNPTR(arg_this) arg_this->__nvoc_metadata_ptr->vtable.__knvlinkStateUnload__
+#define knvlinkStateUnload_FNPTR(arg_this) arg_this->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStateUnload__
 #define knvlinkStateUnload(arg1, arg_this, arg3) knvlinkStateUnload_DISPATCH(arg1, arg_this, arg3)
-#define knvlinkStatePostUnload_FNPTR(arg_this) arg_this->__nvoc_metadata_ptr->vtable.__knvlinkStatePostUnload__
+#define knvlinkStatePostUnload_FNPTR(arg_this) arg_this->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStatePostUnload__
 #define knvlinkStatePostUnload(arg1, arg_this, arg3) knvlinkStatePostUnload_DISPATCH(arg1, arg_this, arg3)
 #define knvlinkIsPresent_FNPTR(arg_this) arg_this->__knvlinkIsPresent__
 #define knvlinkIsPresent(arg1, arg_this) knvlinkIsPresent_DISPATCH(arg1, arg_this)
@@ -1574,6 +1781,9 @@ static inline NvBool knvlinkIsNvleAlidPresent(struct OBJGPU *pGpu, struct Kernel
 #define knvlinkDumpCallbackRegister_FNPTR(pKernelNvlink) pKernelNvlink->__knvlinkDumpCallbackRegister__
 #define knvlinkDumpCallbackRegister(pGpu, pKernelNvlink) knvlinkDumpCallbackRegister_DISPATCH(pGpu, pKernelNvlink)
 #define knvlinkDumpCallbackRegister_HAL(pGpu, pKernelNvlink) knvlinkDumpCallbackRegister_DISPATCH(pGpu, pKernelNvlink)
+#define knvlinkSetPmgrLinkMask_FNPTR(pKernelNvlink) pKernelNvlink->__knvlinkSetPmgrLinkMask__
+#define knvlinkSetPmgrLinkMask(pGpu, pKernelNvlink, pLinkMask) knvlinkSetPmgrLinkMask_DISPATCH(pGpu, pKernelNvlink, pLinkMask)
+#define knvlinkSetPmgrLinkMask_HAL(pGpu, pKernelNvlink, pLinkMask) knvlinkSetPmgrLinkMask_DISPATCH(pGpu, pKernelNvlink, pLinkMask)
 #define knvlinkGetEffectivePeerLinkMask_FNPTR(pKernelNvlink) pKernelNvlink->__knvlinkGetEffectivePeerLinkMask__
 #define knvlinkGetEffectivePeerLinkMask(pGpu, pKernelNvlink, pRemoteGpu, pPeerLinkMask) knvlinkGetEffectivePeerLinkMask_DISPATCH(pGpu, pKernelNvlink, pRemoteGpu, pPeerLinkMask)
 #define knvlinkGetEffectivePeerLinkMask_HAL(pGpu, pKernelNvlink, pRemoteGpu, pPeerLinkMask) knvlinkGetEffectivePeerLinkMask_DISPATCH(pGpu, pKernelNvlink, pRemoteGpu, pPeerLinkMask)
@@ -1604,6 +1814,9 @@ static inline NvBool knvlinkIsNvleAlidPresent(struct OBJGPU *pGpu, struct Kernel
 #define knvlinkABMLinkMaskUpdate_FNPTR(pKernelNvlink) pKernelNvlink->__knvlinkABMLinkMaskUpdate__
 #define knvlinkABMLinkMaskUpdate(pGpu, pKernelNvlink, bNeedsRCRecovery) knvlinkABMLinkMaskUpdate_DISPATCH(pGpu, pKernelNvlink, bNeedsRCRecovery)
 #define knvlinkABMLinkMaskUpdate_HAL(pGpu, pKernelNvlink, bNeedsRCRecovery) knvlinkABMLinkMaskUpdate_DISPATCH(pGpu, pKernelNvlink, bNeedsRCRecovery)
+#define knvlinkAbmFabricHealthMaskUpdate_FNPTR(pKernelNvlink) pKernelNvlink->__knvlinkAbmFabricHealthMaskUpdate__
+#define knvlinkAbmFabricHealthMaskUpdate(pGpu, pKernelNvlink) knvlinkAbmFabricHealthMaskUpdate_DISPATCH(pGpu, pKernelNvlink)
+#define knvlinkAbmFabricHealthMaskUpdate_HAL(pGpu, pKernelNvlink) knvlinkAbmFabricHealthMaskUpdate_DISPATCH(pGpu, pKernelNvlink)
 #define knvlinkDirectConnectCheck_FNPTR(pKernelNvlink) pKernelNvlink->__knvlinkDirectConnectCheck__
 #define knvlinkDirectConnectCheck(pGpu, pKernelNvlink) knvlinkDirectConnectCheck_DISPATCH(pGpu, pKernelNvlink)
 #define knvlinkDirectConnectCheck_HAL(pGpu, pKernelNvlink) knvlinkDirectConnectCheck_DISPATCH(pGpu, pKernelNvlink)
@@ -1616,9 +1829,6 @@ static inline NvBool knvlinkIsNvleAlidPresent(struct OBJGPU *pGpu, struct Kernel
 #define knvlinkCoreGetDevicePciInfo_FNPTR(pKernelNvlink) pKernelNvlink->__knvlinkCoreGetDevicePciInfo__
 #define knvlinkCoreGetDevicePciInfo(pGpu, pKernelNvlink, devInfo) knvlinkCoreGetDevicePciInfo_DISPATCH(pGpu, pKernelNvlink, devInfo)
 #define knvlinkCoreGetDevicePciInfo_HAL(pGpu, pKernelNvlink, devInfo) knvlinkCoreGetDevicePciInfo_DISPATCH(pGpu, pKernelNvlink, devInfo)
-#define knvlinkGetSupportedCounters_FNPTR(pKernelNvlink) pKernelNvlink->__knvlinkGetSupportedCounters__
-#define knvlinkGetSupportedCounters(pGpu, pKernelNvlink, pParams) knvlinkGetSupportedCounters_DISPATCH(pGpu, pKernelNvlink, pParams)
-#define knvlinkGetSupportedCounters_HAL(pGpu, pKernelNvlink, pParams) knvlinkGetSupportedCounters_DISPATCH(pGpu, pKernelNvlink, pParams)
 #define knvlinkGetSupportedCoreLinkStateMask_FNPTR(pKernelNvlink) pKernelNvlink->__knvlinkGetSupportedCoreLinkStateMask__
 #define knvlinkGetSupportedCoreLinkStateMask(pGpu, pKernelNvlink) knvlinkGetSupportedCoreLinkStateMask_DISPATCH(pGpu, pKernelNvlink)
 #define knvlinkGetSupportedCoreLinkStateMask_HAL(pGpu, pKernelNvlink) knvlinkGetSupportedCoreLinkStateMask_DISPATCH(pGpu, pKernelNvlink)
@@ -1634,8 +1844,20 @@ static inline NvBool knvlinkIsNvleAlidPresent(struct OBJGPU *pGpu, struct Kernel
 #define knvlinkGetPlatformInfo_FNPTR(pKernelNvlink) pKernelNvlink->__knvlinkGetPlatformInfo__
 #define knvlinkGetPlatformInfo(pGpu, pKernelNvlink) knvlinkGetPlatformInfo_DISPATCH(pGpu, pKernelNvlink)
 #define knvlinkGetPlatformInfo_HAL(pGpu, pKernelNvlink) knvlinkGetPlatformInfo_DISPATCH(pGpu, pKernelNvlink)
+#define knvlinkSetupResiliencyCallbacks_FNPTR(pKernelNvlink) pKernelNvlink->__knvlinkSetupResiliencyCallbacks__
+#define knvlinkSetupResiliencyCallbacks(pGpu, pKernelNvlink, pInfo) knvlinkSetupResiliencyCallbacks_DISPATCH(pGpu, pKernelNvlink, pInfo)
+#define knvlinkSetupResiliencyCallbacks_HAL(pGpu, pKernelNvlink, pInfo) knvlinkSetupResiliencyCallbacks_DISPATCH(pGpu, pKernelNvlink, pInfo)
+#define knvlinkDestroyResiliencyCallbacks_FNPTR(pKernelNvlink) pKernelNvlink->__knvlinkDestroyResiliencyCallbacks__
+#define knvlinkDestroyResiliencyCallbacks(pGpu, pKernelNvlink, pInfo) knvlinkDestroyResiliencyCallbacks_DISPATCH(pGpu, pKernelNvlink, pInfo)
+#define knvlinkDestroyResiliencyCallbacks_HAL(pGpu, pKernelNvlink, pInfo) knvlinkDestroyResiliencyCallbacks_DISPATCH(pGpu, pKernelNvlink, pInfo)
+#define knvlinkInitializeAlidAndPtc_HAL(pGpu, pKernelNvlink) knvlinkInitializeAlidAndPtc(pGpu, pKernelNvlink)
+#define knvlinkUninitializePtc_HAL(pGpu, pKernelNvlink) knvlinkUninitializePtc(pGpu, pKernelNvlink)
 #define knvlinkAssignNvleClid_HAL(pGpu, pKernelNvlink) knvlinkAssignNvleClid(pGpu, pKernelNvlink)
 #define knvlinkIsNvleAlidPresent_HAL(pGpu, pKernelNvlink, alid, pClid) knvlinkIsNvleAlidPresent(pGpu, pKernelNvlink, alid, pClid)
+#define knvlinkConstructApertures_FNPTR(pEngstate) pEngstate->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateConstructApertures__
+#define knvlinkConstructApertures(pGpu, pEngstate) knvlinkConstructApertures_DISPATCH(pGpu, pEngstate)
+#define knvlinkDestructApertures_FNPTR(pEngstate) pEngstate->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateDestructApertures__
+#define knvlinkDestructApertures(pGpu, pEngstate) knvlinkDestructApertures_DISPATCH(pGpu, pEngstate)
 #define knvlinkInitMissing_FNPTR(pEngstate) pEngstate->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateInitMissing__
 #define knvlinkInitMissing(pGpu, pEngstate) knvlinkInitMissing_DISPATCH(pGpu, pEngstate)
 #define knvlinkStatePreInitUnlocked_FNPTR(pEngstate) pEngstate->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStatePreInitUnlocked__
@@ -1653,27 +1875,27 @@ static inline NvBool knvlinkIsNvleAlidPresent(struct OBJGPU *pGpu, struct Kernel
 
 // Dispatch functions
 static inline NV_STATUS knvlinkConstructEngine_DISPATCH(struct OBJGPU *arg1, struct KernelNvlink *arg_this, ENGDESCRIPTOR arg3) {
-    return arg_this->__nvoc_metadata_ptr->vtable.__knvlinkConstructEngine__(arg1, arg_this, arg3);
+    return arg_this->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateConstructEngine__(arg1, staticCast(arg_this, OBJENGSTATE), arg3);
 }
 
 static inline NV_STATUS knvlinkStatePreInitLocked_DISPATCH(struct OBJGPU *arg1, struct KernelNvlink *arg_this) {
-    return arg_this->__nvoc_metadata_ptr->vtable.__knvlinkStatePreInitLocked__(arg1, arg_this);
+    return arg_this->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStatePreInitLocked__(arg1, staticCast(arg_this, OBJENGSTATE));
 }
 
 static inline NV_STATUS knvlinkStateLoad_DISPATCH(struct OBJGPU *arg1, struct KernelNvlink *arg_this, NvU32 arg3) {
-    return arg_this->__nvoc_metadata_ptr->vtable.__knvlinkStateLoad__(arg1, arg_this, arg3);
+    return arg_this->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStateLoad__(arg1, staticCast(arg_this, OBJENGSTATE), arg3);
 }
 
 static inline NV_STATUS knvlinkStatePostLoad_DISPATCH(struct OBJGPU *arg1, struct KernelNvlink *arg_this, NvU32 arg3) {
-    return arg_this->__nvoc_metadata_ptr->vtable.__knvlinkStatePostLoad__(arg1, arg_this, arg3);
+    return arg_this->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStatePostLoad__(arg1, staticCast(arg_this, OBJENGSTATE), arg3);
 }
 
 static inline NV_STATUS knvlinkStateUnload_DISPATCH(struct OBJGPU *arg1, struct KernelNvlink *arg_this, NvU32 arg3) {
-    return arg_this->__nvoc_metadata_ptr->vtable.__knvlinkStateUnload__(arg1, arg_this, arg3);
+    return arg_this->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStateUnload__(arg1, staticCast(arg_this, OBJENGSTATE), arg3);
 }
 
 static inline NV_STATUS knvlinkStatePostUnload_DISPATCH(struct OBJGPU *arg1, struct KernelNvlink *arg_this, NvU32 arg3) {
-    return arg_this->__nvoc_metadata_ptr->vtable.__knvlinkStatePostUnload__(arg1, arg_this, arg3);
+    return arg_this->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStatePostUnload__(arg1, staticCast(arg_this, OBJENGSTATE), arg3);
 }
 
 static inline NvBool knvlinkIsPresent_DISPATCH(struct OBJGPU *arg1, struct KernelNvlink *arg_this) {
@@ -1788,6 +2010,10 @@ static inline void knvlinkDumpCallbackRegister_DISPATCH(struct OBJGPU *pGpu, str
     pKernelNvlink->__knvlinkDumpCallbackRegister__(pGpu, pKernelNvlink);
 }
 
+static inline NV_STATUS knvlinkSetPmgrLinkMask_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, union NVLINK_BIT_VECTOR *pLinkMask) {
+    return pKernelNvlink->__knvlinkSetPmgrLinkMask__(pGpu, pKernelNvlink, pLinkMask);
+}
+
 static inline void knvlinkGetEffectivePeerLinkMask_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, struct OBJGPU *pRemoteGpu, union NVLINK_BIT_VECTOR *pPeerLinkMask) {
     pKernelNvlink->__knvlinkGetEffectivePeerLinkMask__(pGpu, pKernelNvlink, pRemoteGpu, pPeerLinkMask);
 }
@@ -1828,6 +2054,10 @@ static inline NV_STATUS knvlinkABMLinkMaskUpdate_DISPATCH(struct OBJGPU *pGpu, s
     return pKernelNvlink->__knvlinkABMLinkMaskUpdate__(pGpu, pKernelNvlink, bNeedsRCRecovery);
 }
 
+static inline NV_STATUS knvlinkAbmFabricHealthMaskUpdate_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
+    return pKernelNvlink->__knvlinkAbmFabricHealthMaskUpdate__(pGpu, pKernelNvlink);
+}
+
 static inline void knvlinkDirectConnectCheck_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
     pKernelNvlink->__knvlinkDirectConnectCheck__(pGpu, pKernelNvlink);
 }
@@ -1842,10 +2072,6 @@ static inline NvBool knvlinkIsFloorSweepingNeeded_DISPATCH(struct OBJGPU *pGpu, 
 
 static inline void knvlinkCoreGetDevicePciInfo_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, nvlink_device_info *devInfo) {
     pKernelNvlink->__knvlinkCoreGetDevicePciInfo__(pGpu, pKernelNvlink, devInfo);
-}
-
-static inline NV_STATUS knvlinkGetSupportedCounters_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NV2080_CTRL_NVLINK_GET_SUPPORTED_COUNTERS_PARAMS *pParams) {
-    return pKernelNvlink->__knvlinkGetSupportedCounters__(pGpu, pKernelNvlink, pParams);
 }
 
 static inline NvU32 knvlinkGetSupportedCoreLinkStateMask_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink) {
@@ -1868,32 +2094,48 @@ static inline NV_STATUS knvlinkGetPlatformInfo_DISPATCH(struct OBJGPU *pGpu, str
     return pKernelNvlink->__knvlinkGetPlatformInfo__(pGpu, pKernelNvlink);
 }
 
+static inline NV_STATUS knvlinkSetupResiliencyCallbacks_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NVLINK_RESILIENCY_INFO *pInfo) {
+    return pKernelNvlink->__knvlinkSetupResiliencyCallbacks__(pGpu, pKernelNvlink, pInfo);
+}
+
+static inline void knvlinkDestroyResiliencyCallbacks_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NVLINK_RESILIENCY_INFO *pInfo) {
+    pKernelNvlink->__knvlinkDestroyResiliencyCallbacks__(pGpu, pKernelNvlink, pInfo);
+}
+
+static inline NV_STATUS knvlinkConstructApertures_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pEngstate) {
+    return pEngstate->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateConstructApertures__(pGpu, staticCast(pEngstate, OBJENGSTATE));
+}
+
+static inline void knvlinkDestructApertures_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pEngstate) {
+    pEngstate->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateDestructApertures__(pGpu, staticCast(pEngstate, OBJENGSTATE));
+}
+
 static inline void knvlinkInitMissing_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pEngstate) {
-    pEngstate->__nvoc_metadata_ptr->vtable.__knvlinkInitMissing__(pGpu, pEngstate);
+    pEngstate->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateInitMissing__(pGpu, staticCast(pEngstate, OBJENGSTATE));
 }
 
 static inline NV_STATUS knvlinkStatePreInitUnlocked_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pEngstate) {
-    return pEngstate->__nvoc_metadata_ptr->vtable.__knvlinkStatePreInitUnlocked__(pGpu, pEngstate);
+    return pEngstate->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStatePreInitUnlocked__(pGpu, staticCast(pEngstate, OBJENGSTATE));
 }
 
 static inline NV_STATUS knvlinkStateInitLocked_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pEngstate) {
-    return pEngstate->__nvoc_metadata_ptr->vtable.__knvlinkStateInitLocked__(pGpu, pEngstate);
+    return pEngstate->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStateInitLocked__(pGpu, staticCast(pEngstate, OBJENGSTATE));
 }
 
 static inline NV_STATUS knvlinkStateInitUnlocked_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pEngstate) {
-    return pEngstate->__nvoc_metadata_ptr->vtable.__knvlinkStateInitUnlocked__(pGpu, pEngstate);
+    return pEngstate->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStateInitUnlocked__(pGpu, staticCast(pEngstate, OBJENGSTATE));
 }
 
 static inline NV_STATUS knvlinkStatePreLoad_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pEngstate, NvU32 arg3) {
-    return pEngstate->__nvoc_metadata_ptr->vtable.__knvlinkStatePreLoad__(pGpu, pEngstate, arg3);
+    return pEngstate->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStatePreLoad__(pGpu, staticCast(pEngstate, OBJENGSTATE), arg3);
 }
 
 static inline NV_STATUS knvlinkStatePreUnload_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pEngstate, NvU32 arg3) {
-    return pEngstate->__nvoc_metadata_ptr->vtable.__knvlinkStatePreUnload__(pGpu, pEngstate, arg3);
+    return pEngstate->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStatePreUnload__(pGpu, staticCast(pEngstate, OBJENGSTATE), arg3);
 }
 
 static inline void knvlinkStateDestroy_DISPATCH(struct OBJGPU *pGpu, struct KernelNvlink *pEngstate) {
-    pEngstate->__nvoc_metadata_ptr->vtable.__knvlinkStateDestroy__(pGpu, pEngstate);
+    pEngstate->__nvoc_base_OBJENGSTATE.__nvoc_metadata_ptr->vtable.__engstateStateDestroy__(pGpu, staticCast(pEngstate, OBJENGSTATE));
 }
 
 // Virtual method declarations and/or inline definitions
@@ -1979,7 +2221,11 @@ NV_STATUS knvlinkLogAliDebugMessages_GH100(struct OBJGPU *pGpu, struct KernelNvl
 
 NV_STATUS knvlinkLogAliDebugMessages_GB100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvBool bFinal);
 
+void knvlinkDumpCallbackRegister_GR100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
+
 void knvlinkDumpCallbackRegister_GB100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
+
+NV_STATUS knvlinkSetPmgrLinkMask_GR100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, union NVLINK_BIT_VECTOR *pLinkMask);
 
 void knvlinkGetEffectivePeerLinkMask_GH100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, struct OBJGPU *pRemoteGpu, union NVLINK_BIT_VECTOR *pPeerLinkMask);
 
@@ -1990,6 +2236,8 @@ NvU32 knvlinkGetNumLinksToBeReducedPerIoctrl_GH100(struct OBJGPU *pGpu, struct K
 NvBool knvlinkIsBandwidthModeOff_GH100(struct KernelNvlink *pKernelNvlink);
 
 NvBool knvlinkIsBwModeSupported_GH100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU16 mode);
+
+NvBool knvlinkIsBwModeSupported_GR100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU16 mode);
 
 NvBool knvlinkIsBwModeSupported_GB100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU16 mode);
 
@@ -2003,9 +2251,15 @@ void knvlinkPostSchedulingEnableCallbackUnregister_GB100(struct OBJGPU *pGpu, st
 
 NV_STATUS knvlinkGetSupportedBwMode_GH100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NV2080_CTRL_NVLINK_GET_SUPPORTED_BW_MODE_PARAMS *pParams);
 
+NV_STATUS knvlinkGetSupportedBwMode_GR100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NV2080_CTRL_NVLINK_GET_SUPPORTED_BW_MODE_PARAMS *pParams);
+
 NV_STATUS knvlinkGetSupportedBwMode_GB100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NV2080_CTRL_NVLINK_GET_SUPPORTED_BW_MODE_PARAMS *pParams);
 
+NV_STATUS knvlinkABMLinkMaskUpdate_GR100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvBool bNeedsRCRecovery);
+
 NV_STATUS knvlinkABMLinkMaskUpdate_GB100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvBool bNeedsRCRecovery);
+
+NV_STATUS knvlinkAbmFabricHealthMaskUpdate_GB100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
 
 void knvlinkDirectConnectCheck_GH100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
 
@@ -2014,8 +2268,6 @@ NvBool knvlinkIsGpuReducedNvlinkConfig_GA100(struct OBJGPU *pGpu, struct KernelN
 NvBool knvlinkIsFloorSweepingNeeded_GH100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 numActiveLinksPerIoctrl, NvU32 numLinksPerIoctrl);
 
 void knvlinkCoreGetDevicePciInfo_GP100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, nvlink_device_info *devInfo);
-
-NV_STATUS knvlinkGetSupportedCounters_GB100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NV2080_CTRL_NVLINK_GET_SUPPORTED_COUNTERS_PARAMS *pParams);
 
 NvU32 knvlinkGetSupportedCoreLinkStateMask_GP100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
 
@@ -2028,6 +2280,10 @@ NvBool knvlinkIsNvleEnabled_GB100(struct OBJGPU *pGpu, struct KernelNvlink *pKer
 NV_STATUS knvlinkEncryptionGetUpdateGpuIdentifiers_GB100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvBool bGet);
 
 NV_STATUS knvlinkGetPlatformInfo_GB100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
+
+NV_STATUS knvlinkSetupResiliencyCallbacks_GR100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NVLINK_RESILIENCY_INFO *pInfo);
+
+void knvlinkDestroyResiliencyCallbacks_GR100(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NVLINK_RESILIENCY_INFO *pInfo);
 
 NV_STATUS knvlinkAssignNvleClid_IMPL(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink);
 
@@ -2146,6 +2402,10 @@ static inline void knvlinkDumpCallbackRegister_d44104(struct OBJGPU *pGpu, struc
     return;
 }
 
+static inline NV_STATUS knvlinkSetPmgrLinkMask_ac1694(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, union NVLINK_BIT_VECTOR *pLinkMask){
+    return NV_OK;
+}
+
 static inline void knvlinkGetEffectivePeerLinkMask_d44104(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, struct OBJGPU *pRemoteGpu, union NVLINK_BIT_VECTOR *pPeerLinkMask){
     return;
 }
@@ -2186,6 +2446,10 @@ static inline NV_STATUS knvlinkABMLinkMaskUpdate_395e98(struct OBJGPU *pGpu, str
     return NV_ERR_NOT_SUPPORTED;
 }
 
+static inline NV_STATUS knvlinkAbmFabricHealthMaskUpdate_395e98(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink){
+    return NV_ERR_NOT_SUPPORTED;
+}
+
 static inline void knvlinkDirectConnectCheck_d44104(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink){
     return;
 }
@@ -2200,10 +2464,6 @@ static inline NvBool knvlinkIsFloorSweepingNeeded_d69453(struct OBJGPU *pGpu, st
 
 static inline void knvlinkCoreGetDevicePciInfo_d44104(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, nvlink_device_info *devInfo){
     return;
-}
-
-static inline NV_STATUS knvlinkGetSupportedCounters_395e98(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NV2080_CTRL_NVLINK_GET_SUPPORTED_COUNTERS_PARAMS *pParams){
-    return NV_ERR_NOT_SUPPORTED;
 }
 
 static inline NvU32 knvlinkGetSupportedCoreLinkStateMask_b2b553(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink){
@@ -2226,11 +2486,27 @@ static inline NV_STATUS knvlinkGetPlatformInfo_395e98(struct OBJGPU *pGpu, struc
     return NV_ERR_NOT_SUPPORTED;
 }
 
+static inline NV_STATUS knvlinkSetupResiliencyCallbacks_ac1694(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NVLINK_RESILIENCY_INFO *pInfo){
+    return NV_OK;
+}
+
+static inline void knvlinkDestroyResiliencyCallbacks_d44104(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NVLINK_RESILIENCY_INFO *pInfo){
+    return;
+}
+
+static inline NV_STATUS knvlinkInitializeAlidAndPtc_ac1694(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink){
+    return NV_OK;
+}
+
+static inline NV_STATUS knvlinkUninitializePtc_ac1694(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink){
+    return NV_OK;
+}
+
 // Static dispatch method declarations
 // Static inline method definitions
-static inline NvU64 knvlinkGetInitializedLinkMask(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink){
+static inline union NVLINK_BIT_VECTOR * knvlinkGetInitializedLinkMask(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink){
     struct KernelNvlink_PRIVATE *pKernelNvlink_PRIVATE = (struct KernelNvlink_PRIVATE *)pKernelNvlink;
-    return (NvU64)((64 == 32) ? (((NvU32)(((NvU64)(pKernelNvlink_PRIVATE->initializedLinks)) & 4294967295U))) : (pKernelNvlink_PRIVATE->initializedLinks));
+    return &pKernelNvlink_PRIVATE->initializedLinks;
 }
 
 static inline NvBool knvlinkAreLinksRegistryOverriden(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink){
@@ -2238,9 +2514,9 @@ static inline NvBool knvlinkAreLinksRegistryOverriden(struct OBJGPU *pGpu, struc
     return pKernelNvlink_PRIVATE->bRegistryLinkOverride;
 }
 
-static inline NvU64 knvlinkGetPeerLinkMask(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 peerId){
+static inline union NVLINK_BIT_VECTOR * knvlinkGetPeerLinkMask(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 peerId){
     struct KernelNvlink_PRIVATE *pKernelNvlink_PRIVATE = (struct KernelNvlink_PRIVATE *)pKernelNvlink;
-    return (peerId < ((sizeof (pKernelNvlink_PRIVATE->peerLinkMasks) / sizeof ((pKernelNvlink_PRIVATE->peerLinkMasks)[0])))) ? (NvU64)((64 == 32) ? (((NvU32)(((NvU64)(kNvlinkGetLinkMaskAsPrimitve(&pKernelNvlink_PRIVATE->peerLinkMasks[peerId]))) & 4294967295U))) : kNvlinkGetLinkMaskAsPrimitve(&pKernelNvlink_PRIVATE->peerLinkMasks[peerId])) : 0;
+    return (peerId < ((sizeof (pKernelNvlink_PRIVATE->peerLinkMasks) / sizeof ((pKernelNvlink_PRIVATE->peerLinkMasks)[0])))) ? &pKernelNvlink_PRIVATE->peerLinkMasks[peerId] : ((void *)0);
 }
 
 static inline KNVLINK_RM_LINK * knvlinkGetLinkData(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 linkId){
@@ -2313,9 +2589,29 @@ static inline NvBool knvlinkGetAbmEnabled(struct OBJGPU *pGpu, struct KernelNvli
     return pKernelNvlink_PRIVATE->bAbmEnabled;
 }
 
+static inline NvU32 knvlinkGetAmapUpdateStatus(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink){
+    struct KernelNvlink_PRIVATE *pKernelNvlink_PRIVATE = (struct KernelNvlink_PRIVATE *)pKernelNvlink;
+    return pKernelNvlink_PRIVATE->gpuAmapUpdateStatus;
+}
+
+static inline NvBool knvlinkIsAsyncRbmEnabled(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink){
+    struct KernelNvlink_PRIVATE *pKernelNvlink_PRIVATE = (struct KernelNvlink_PRIVATE *)pKernelNvlink;
+    return pKernelNvlink_PRIVATE->bAsyncRbmEnabled;
+}
+
+static inline NvBool knvlinkIsTrafficQuiesceRequested(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink){
+    struct KernelNvlink_PRIVATE *pKernelNvlink_PRIVATE = (struct KernelNvlink_PRIVATE *)pKernelNvlink;
+    return pKernelNvlink_PRIVATE->bTrafficQuiesceEnable;
+}
+
 static inline union NVLINK_BIT_VECTOR * knvlinkGetPendingAbmLinkMaskToBeReduced(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink){
     struct KernelNvlink_PRIVATE *pKernelNvlink_PRIVATE = (struct KernelNvlink_PRIVATE *)pKernelNvlink;
     return &pKernelNvlink_PRIVATE->pendingAbmLinkMaskToBeReduced;
+}
+
+static inline NvBool knvlinkIsNvleQualModeEnabled(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink){
+    struct KernelNvlink_PRIVATE *pKernelNvlink_PRIVATE = (struct KernelNvlink_PRIVATE *)pKernelNvlink;
+    return pKernelNvlink_PRIVATE->bNvleQualModeRegkey;
 }
 
 static inline void knvlinkSetPendingAbmLinkMaskToBeReduced(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, union NVLINK_BIT_VECTOR *pPendingAbmLinkMaskToBeReduced){
@@ -2355,14 +2651,24 @@ static inline NvU32 knvlinkGetMinionControl(struct OBJGPU *pGpu, struct KernelNv
      (pKernelNvlink->nvlinkLinks[linkId].remoteEndInfo.function == 0))
 
 #define KNVLINK_SET_BW_MODE_STATUS(pKernelNvlink, b) \
-    NV_PRINTF(LEVEL_INFO, "Transitioning BW mode status from 0x%x to 0x%x\n",  \
-        knvlinkGetBWModeStatus(ENG_GET_GPU(pKernelNvlink), pKernelNvlink), b); \
-    knvlinkSetBWModeStatus(ENG_GET_GPU(pKernelNvlink), pKernelNvlink, b); \
+    do { \
+        NV_PRINTF(LEVEL_INFO, "GPU%u Transitioning BW mode status from 0x%x to 0x%x\n",  \
+            ENG_GET_GPU(pKernelNvlink)->gpuInstance, \
+            knvlinkGetBWModeStatus(ENG_GET_GPU(pKernelNvlink), pKernelNvlink), b); \
+        knvlinkSetBWModeStatus(ENG_GET_GPU(pKernelNvlink), pKernelNvlink, b); \
+    } while (0)
 //
 // NVLINK internal functions
 //
 NV_STATUS knvlinkRetrainLinkFromOff (struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 linkId);
 NV_STATUS knvlinkRetrainLinkFromSafe(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, NvU32 linkId);
+NV_STATUS knvlinkLfmQuiesceRetryTimerCallback(struct OBJGPU *pGpu, struct OBJTMR *pTmr, TMR_EVENT *pEvent);
+
+
+typedef struct _def_nvd_state NVD_STATE;
+
+NV_STATUS knvlinkDumpEngineFunc(struct OBJGPU *pGpu, PRB_ENCODER *pPrbEnc, NVD_STATE *pNvDumpState, void *pvData);
+NV_STATUS knvlinkSerializeResiliencyTimingToProtobuf(struct OBJGPU *pGpu, struct KernelNvlink *pKernelNvlink, PRB_ENCODER *pPrbEnc);
 
 //
 // NVLINK Callback functions from core library

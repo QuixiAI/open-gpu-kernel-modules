@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2009-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2009-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -32,7 +32,7 @@
 #include "gsp/gspifpub.h"
 #include "platform/p2p/p2p_caps.h"
 #include "kernel/gpu/nvlink/kernel_nvlink.h"
-#include "nvRmReg.h"
+#include "nvrm_registry.h"
 #include "rmapi/rs_utils.h"
 #include "vgpu/rpc.h"
 #include "vgpu/vgpu_events.h"
@@ -372,11 +372,6 @@ p2papiConstruct_IMPL
     API_GPU_FULL_POWER_SANITY_CHECK(pLocalGpu, NV_TRUE, NV_FALSE);
     API_GPU_FULL_POWER_SANITY_CHECK(pRemoteGpu, NV_TRUE, NV_FALSE);
 
-    if (gpuIsApmFeatureEnabled(pLocalGpu))
-    {
-        return NV_ERR_NOT_SUPPORTED;
-    }
-
     // SPA peer only supported when we support ATS
     if (bSpaAccessOnly && (!pLocalGpu->getProperty(pLocalGpu, PDB_PROP_GPU_ATS_SUPPORTED)))
     {
@@ -412,8 +407,6 @@ p2papiConstruct_IMPL
 
     p2pCaps = pP2pCapsParams->p2pCaps;
 
-    portMemFreeStackOrHeap(pP2pCapsParams);
-
     if (REF_VAL(NV0000_CTRL_SYSTEM_GET_P2P_CAPS_C2C_SUPPORTED, p2pCaps))
         p2pConnectionType = P2P_CONNECTIVITY_C2C;
     // It's impossible to detect P2P_CONNECTIVITY_NVLINK_INDIRECT connectivity.
@@ -428,8 +421,18 @@ p2papiConstruct_IMPL
     else
     {
         NV_PRINTF(LEVEL_ERROR, "Unknown connection type\n");
+        portMemFreeStackOrHeap(pP2pCapsParams);
         return NV_ERR_NOT_SUPPORTED;
     }
+
+    if ((p2pConnectionType == P2P_CONNECTIVITY_NVLINK) &&
+        pP2pCapsParams->p2pCapsStatus[NV0000_CTRL_P2P_CAPS_INDEX_NVLINK] == NV0000_P2P_CAPS_STATUS_NOT_READY)
+    {
+        portMemFreeStackOrHeap(pP2pCapsParams);
+        return NV_ERR_NOT_READY;
+    }
+
+    portMemFreeStackOrHeap(pP2pCapsParams);
 
     //
     // Allocate P2P PCIE Mailbox areas if all of the following conditions occur:

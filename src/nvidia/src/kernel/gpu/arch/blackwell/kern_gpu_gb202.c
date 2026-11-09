@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2022-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -34,8 +34,9 @@
 #include "gpu/mem_mgr/ce_utils.h"
 #include "nverror.h"
 #include "os/os.h"
+#include "gpu/gpu_mods_error.h"
 
-#include "published/blackwell/gb202/dev_boot_zb.h"
+#include "published/blackwell/gb202/dev_pmc_zb.h"
 #include "published/blackwell/gb202/dev_xtl_ep_pcfg_gpu.h"
 
 #include "published/blackwell/gb202/dev_therm.h"
@@ -61,6 +62,7 @@ static const GPUCHILDPRESENT gpuChildrenPresent_GB202[] =
     GPU_CHILD_PRESENT(OBJTMR, 1),
     GPU_CHILD_PRESENT(KernelMIGManager, 1),
     GPU_CHILD_PRESENT(KernelGraphicsManager, 1),
+    GPU_CHILD_PRESENT(KernelVbios, 1),
     GPU_CHILD_PRESENT(KernelRc, 1),
     GPU_CHILD_PRESENT(Intr, 1),
     GPU_CHILD_PRESENT(NvDebugDump, 1),
@@ -90,6 +92,8 @@ static const GPUCHILDPRESENT gpuChildrenPresent_GB202[] =
     GPU_CHILD_PRESENT(KernelSec2, 1),
     GPU_CHILD_PRESENT(KernelGsplite, 4),
     GPU_CHILD_PRESENT(KernelCcu, 1),
+    GPU_CHILD_PRESENT(TdispMgr, 1),
+    GPU_CHILD_PRESENT(KernelOob, 1),
 };
 
 const GPUCHILDPRESENT*
@@ -207,6 +211,8 @@ gpuHandleSecFault_GB202
 
     MODS_ARCH_ERROR_PRINTF("NV_EP_PCFG_GPU_VSEC_DEBUG_SEC_1:0x%x NV_EP_PCFG_GPU_VSEC_DEBUG_SEC_2:0x%x\n",
                             secDebug1, secDebug2);
+    MODS_REPORT_BUS_ERROR(pGpu, MODSDRV_ERROR_SEVERITY_FATAL,
+                          MODSDRV_BUS_ERROR_CODE_VSEC_DEBUG_SEC_REGISTER, 0, secDebug1);
     NV_PRINTF(LEVEL_FATAL, "SEC_FAULT lockdown detected. This is fatal. "
                             "RM will now shut down. NV_EP_PCFG_GPU_VSEC_DEBUG_SEC_1: 0x%x"
                             "NV_EP_PCFG_GPU_VSEC_DEBUG_SEC_2: 0x%x\n", secDebug1, secDebug2);
@@ -223,6 +229,8 @@ gpuHandleSecFault_GB202
     if (DRF_VAL(_SYSCTRL, _SEC_FAULT_BIT_POSITION, field, secDebug1) != 0) \
     { \
         MODS_ARCH_ERROR_PRINTF("NV_EP_PCFG_GPU_VSEC_DEBUG_SEC_1" #field "\n"); \
+        MODS_REPORT_BUS_ERROR(pGpu, MODSDRV_ERROR_SEVERITY_FATAL, \
+                              MODSDRV_BUS_ERROR_CODE_VSEC_DEBUG_SEC_REGISTER, 0, secDebug1); \
         NV_PRINTF(LEVEL_FATAL, "SEC_FAULT type: " #field "\n"); \
         nvErrorLog_va((void *)(pGpu), SEC_FAULT_ERROR, \
                       "SEC_FAULT: " #field ); \
@@ -262,6 +270,8 @@ gpuHandleSecFault_GB202
     if (DRF_VAL(_EP_PCFG_GPU, _VSEC_DEBUG_SEC_2, _BAR_FIREWALL_ENGAGE, secDebug2) != 0)
     {
         MODS_ARCH_ERROR_PRINTF("NV_EP_PCFG_GPU_VSEC_DEBUG_SEC _BAR_FIREWALL_ENGAGE\n");
+        MODS_REPORT_BUS_ERROR(pGpu, MODSDRV_ERROR_SEVERITY_FATAL,
+                              MODSDRV_BUS_ERROR_CODE_VSEC_DEBUG_SEC_REGISTER, 0, secDebug2);
         NV_PRINTF(LEVEL_FATAL, "SEC_FAULT type: _BAR_FIREWALL_ENGAGE\n");
         nvErrorLog_va((void *)(pGpu), SEC_FAULT_ERROR,
                       "SEC_FAULT: _BAR_FIREWALL_ENGAGE" );
@@ -272,6 +282,8 @@ gpuHandleSecFault_GB202
     if (data != 0)
     {
         MODS_ARCH_ERROR_PRINTF("NV_EP_PCFG_GPU_VSEC_DEBUG_SEC_2_IFF_POS value: 0x%x\n", data);
+        MODS_REPORT_BUS_ERROR(pGpu, MODSDRV_ERROR_SEVERITY_FATAL,
+                              MODSDRV_BUS_ERROR_CODE_VSEC_DEBUG_SEC_REGISTER, 0, data);
         NV_PRINTF(LEVEL_FATAL, "SEC_2_FAULT type: _IFF_POS value: 0x%x\n", data);
         nvErrorLog_va((void *)(pGpu), SEC_FAULT_ERROR,
                       "SEC_2_FAULT: _IFF_POS value: 0x%x", data);
@@ -314,7 +326,7 @@ gpuGetFirstAsyncLce_GB202
     NV_STATUS status = NV_OK;
     NvU32 pCeInstance;
 
-    status = ceutilsGetFirstAsyncCe(NULL, pGpu, 0, 0, &pCeInstance, NV_TRUE);
+    status = ceutilsGetFirstCe(pGpu, 0, 0, &pCeInstance, NV_TRUE, NV_TRUE);
     if (status != NV_OK)
     {
         return NV2080_ENGINE_TYPE_NULL;

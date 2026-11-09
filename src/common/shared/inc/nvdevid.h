@@ -157,6 +157,8 @@
 #define NV_PCI_SUBID_DEVICE                    31:16  /* RW--F */
 #define NV_PCI_SUBID_VENDOR                    15:0   /* RW--F */
 
+
+
 ///////////////////////////////////////////////////////////////////////////////////////////
 //
 // GPU DEVICE IDS
@@ -657,7 +659,7 @@ enum {
 ,     CS_PLDA_XPRESSRICH_AXI_REF
 ,     CS_AMPERE_AMPEREONE160
 ,     CS_PHYTIUM_S5000
-,     CS_RESERVED_2
+,     CS_NVIDIA_T268
 ,     CS_RESERVED_3
 ,     CS_AMD_RPH
 ,     CS_INTEL_B660
@@ -665,13 +667,14 @@ enum {
 ,     CS_AMPERE_AMPEREONE192
 ,     CS_NVIDIA_T254
 ,     CS_NVIDIA_TB500
+,     CS_NVIDIA_T256
 ,     CS_MAX_PCIE
 };
 
 // Chip IDs for Tegra SoCs
 #define NV_CHIP_ID_T234 0x2350
 
-#define NV_CHIP_ID_T239 0x23b0
+#define NV_CHIP_ID_T238 0x23b0
 
 enum {
     RP_UNKNOWN = 0
@@ -721,4 +724,3 @@ enum {
 };
 
 #endif //NVDEVID_H
-

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2010-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2010-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -359,8 +359,8 @@ unsigned Edid::getBlockCount()
 
         if (blockCount > EDID_MAX_BLOCK_COUNT)
         {
-            DP_PRINTF(DP_ERROR, "DPEDID> %s: DDC read returned questionable results: "
-                      "Total block Count too high: %d", __FUNCTION__, blockCount);
+            DP_PRINTF(DP_ERROR, "DPEDID> DDC read returned questionable results: "
+                      "Total block Count too high: %d", blockCount);
             return 1;
         }
         //
@@ -384,6 +384,11 @@ unsigned Edid::getBlockCount()
                 (pExt[EDID_CTA_EXT_DATA_BLOCK_TAG_OFFSET] == EDID_CTA_EXT_DATA_BLOCK_TAG_HF_EEODB))
             {
                 blockCount = pExt[EDID_CTA_EXT_DATA_BLOCK_EXT_COUNT_OFFSET] + 1;
+                // Apply the block limit to the sink-provided override as well.
+                if (blockCount > EDID_MAX_BLOCK_COUNT)
+                {
+                    blockCount = EDID_MAX_BLOCK_COUNT;
+                }
             }
 
         }
@@ -404,7 +409,7 @@ unsigned Edid::getBlockCount()
     else
     {
         // Unknown EDID version. Skip it.
-        DP_PRINTF(DP_ERROR, "DPEDID> %s: Unknown EDID Version!",__FUNCTION__);
+        DP_PRINTF(DP_ERROR, "DPEDID> Unknown EDID Version!");
         DP_ASSERT(0 && "Unknown EDID version!");
         return 1;
     }
@@ -418,6 +423,13 @@ unsigned Edid::getEdidSize() const
 void DisplayPort::Edid::swap(Edid & right)
 {
     swapBuffers(buffer, right.buffer);
+
+    bool tmp;
+    tmp = forcedCheckSum;  forcedCheckSum  = right.forcedCheckSum;  right.forcedCheckSum  = tmp;
+    tmp = fallbackEdid;    fallbackEdid    = right.fallbackEdid;    right.fallbackEdid    = tmp;
+    tmp = patchedChecksum; patchedChecksum = right.patchedChecksum; right.patchedChecksum = tmp;
+
+    right.validateCheckSum();
     validateCheckSum();
 }
 

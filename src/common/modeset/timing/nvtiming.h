@@ -1179,7 +1179,7 @@ typedef struct tagNVT_5BYTES
 #define NVT_CEA861_EOTF_GAMMA_SDR                   0x01  // ET_0 Traditional gamma - SDR Luminance Range
 #define NVT_CEA861_EOTF_GAMMA_HDR                   0x02  // ET_1 Traditional gamma - HDR Luminance Range
 #define NVT_CEA861_EOTF_SMPTE_ST2084                0x04  // ET_2 SMPTE ST2084 EOTF (a.k.a PQ - Perceptual Quantizer EOTF)
-#define NVT_CEA861_EOTF_FUTURE                      0x08  // ET_3 Future EOTF
+#define NVT_CEA861_EOTF_HLG                         0x08  // ET_3 Hybrid Log Gamma
 
 //
 // Supported Static Metadata Descriptor - byte 4
@@ -2417,7 +2417,7 @@ typedef struct tagNVT_HDR_STATIC_METADATA
         NvU8 trad_gamma_sdr_eotf : 1;
         NvU8 trad_gamma_hdr_eotf : 1;
         NvU8 smpte_st_2084_eotf : 1;
-        NvU8 future_eotf : 1;
+        NvU8 hybrid_log_gamma_eotf : 1;
     } supported_eotf;
 
     NvU8 static_metadata_type;      // set to 1 if the sink support for static meta data type 1
@@ -2826,6 +2826,9 @@ typedef struct _tagNVT_DISPLAYID_2_0_INFO
 
     // CTA DisplayID Data Block (Not Mandatory)
     NVT_DISPLAYID_CTA                         cta;
+
+    // DID2 validation failure reasons collected during parse/strong validation (NVT_DID2_VALIDATION_ERR_* masks).
+    NvU32                                     validation_fail_reason;
 } NVT_DISPLAYID_2_0_INFO;
 
 #define NVT_EDID_PRIMARY_COLOR_FP2INT_FACTOR 1024  // Per EDID 1.4, 10bit color primary is encoded in floating point as (bit9/2 + bit8/4 + bi7/8 + ... + bit0)
@@ -2840,6 +2843,7 @@ typedef struct tagNVT_EDID_INFO
     NvU32  serial_number;
     NvU8   week;
     NvU16  year;
+    NvBool bIsNativeDID2;
 
     // the interface info
     struct
@@ -5790,6 +5794,7 @@ typedef enum
     NVT_DID2_VALIDATION_ERR_TYPE7,
     NVT_DID2_VALIDATION_ERR_TYPE10,
     NVT_DID2_VALIDATION_ERR_ADAPTIVE_SYNC,
+    NVT_DID2_VALIDATION_ERR_PRODUCT_NAME_SIZE,
 } NVT_DID2_VALIDATION_ERR_STATUS;
 #define NVT_DID2_VALIDATION_ERR_MASK(x) NVBIT32(x)
 
@@ -5905,9 +5910,12 @@ NvU32 NvTiming_EDIDStrongValidationMask(NvU8 *pEdid, NvU32 length);
 NVT_STATUS NvTiming_EDIDValidation(NvU8 *pEdid, NvU32 length, NvBool bIsStrongValidation);
 
 // DisplayID20 standalone entry parse
-NVT_STATUS NV_STDCALL NvTiming_parseDisplayId20Info(const NvU8 *pDisplayId, NvU32 length, NVT_DISPLAYID_2_0_INFO *pDisplayIdInfo);
-NvU32 NvTiming_DisplayID2ValidationMask(const NvU8 *pDisplayId2, NVT_DISPLAYID_2_0_INFO *pDisplayId20Info, NvBool bIsStrongValidation);
-NVT_STATUS NvTiming_DisplayID2ValidationDataBlocks(const NvU8 *pDisplayId2, NVT_DISPLAYID_2_0_INFO *pDisplayId20Info, NvBool bIsStrongValidation);
+NVT_STATUS NV_STDCALL NvTiming_parseDisplayId20Info(const NvU8 *pDisplayId2, NvU32 length, NVT_DISPLAYID_2_0_INFO *pDisplayId2Info);
+NvU32 NvTiming_DisplayID2ValidationMask(const NvU8 *pDisplayId2, NVT_DISPLAYID_2_0_INFO *pDisplayId2Info, NvBool bIsStrongValidation);
+NVT_STATUS NvTiming_DisplayID2ValidationDataBlocks(const NvU8 *pDisplayId2, NVT_DISPLAYID_2_0_INFO *pDisplayId2Info, NvBool bIsStrongValidation);
+
+// Maps parsed DisplayId2 fields into the corresponding EDID info structure
+NVT_STATUS NV_STDCALL NvTiming_DisplayId20MapToEdidInfo(const NVT_DISPLAYID_2_0_INFO *pDisplayId2Info, NVT_EDID_INFO *pEdidInfo);
 
 NVT_STATUS NvTiming_Get18ByteLongDescriptorIndex(NVT_EDID_INFO *pEdidInfo, NvU8 tag, NvU32 *dtdIndex);
 NVT_STATUS NvTiming_GetProductName(const NVT_EDID_INFO *pEdidInfo, NvU8 *pProductName, const NvU32 productNameLength);
@@ -5925,6 +5933,8 @@ void  patchChecksum(NvU8* pBuf);
 NvBool isChecksumValid(NvU8* pBuf);
 NvU32 RRx1kToPclk (const NVT_TIMING *pT);
 NvU32 RRx1kToPclk1khz (const NVT_TIMING *pT);
+NvU32 nvt_fp16ToFP32(NvU16 half);
+NvU32 nvt_sqrt(NvU32 n);
 
 NvU32      NvTiming_CalculateVBlankTimeInUs(const NVT_TIMING *pT);
 NVT_STATUS NvTiming_ComposeCustTimingString(NVT_TIMING *pT);

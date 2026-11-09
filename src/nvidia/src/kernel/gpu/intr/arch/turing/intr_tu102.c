@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2017-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2017-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -25,6 +25,7 @@
 #include "kernel/gpu/intr/intr.h"
 #include "gpu/gpu.h"
 #include "kernel/gpu/intr/engine_idx.h"
+#include "kernel/gpu/gr/kernel_graphics.h"
 #include "gpu/bif/kernel_bif.h"
 #include "gpu/timer/objtmr.h"
 #include "gpu/uvm/uvm.h"
@@ -185,6 +186,8 @@ intrCacheIntrFields_TU102
     // selectively at leaf level)
     //
     pIntr->intrTopEnMask |= intrGetIntrTopLockedMask_HAL(pIntr);
+
+    intrCachePreemptIntrVectors_HAL(pGpu, pIntr);
 
     // Cache client owned, shared interrupt, and display vectors for ease of use later
     pIntr->accessCntrIntrVector      = intrGetVectorFromEngineId(pGpu, pIntr, MC_ENGINE_IDX_ACCESS_CNTR, NV_FALSE);
@@ -718,7 +721,7 @@ intrIsPending_TU102
  *        for a generic interface that works across generations and doesn't expose the
  *        intrVector to the module. Extenuating circumstances, such as the interrupt
  *        table not being initialized, can still use this.
- * 
+ *
  *
  * @param[in]   pGpu          OBJGPU pointer
  * @param[in]   pIntr         Intr pointer
@@ -842,11 +845,19 @@ _intrGetLeafStatus_TU102
 {
     NvU32 subtreeIndex;
     NvU32 leafIndex;
+    NvU32 lastLeafIndex;
 
     FOR_EACH_INDEX_IN_MASK(64, subtreeIndex,
                            intrGetIntrTopLegacyStallMask_HAL(pIntr))
     {
+        //
+        // The leafIndex and lastLeafIndex is computed from legacy stall tree.
+        // RM ensure that these two numbers are less than NV_MAX_INTR_LEAVES before.
+        // calling into this function.
+        //
         leafIndex = NV_CTRL_INTR_SUBTREE_TO_LEAF_IDX_START(subtreeIndex);
+        lastLeafIndex = NV_CTRL_INTR_SUBTREE_TO_LEAF_IDX_END(subtreeIndex);
+
         if (pIntr->getProperty(pIntr, PDB_PROP_INTR_READ_ONLY_EVEN_NUMBERED_INTR_LEAF_REGS))
         {
             //
@@ -864,7 +875,7 @@ _intrGetLeafStatus_TU102
         }
         else
         {
-            for (; leafIndex <= NV_CTRL_INTR_SUBTREE_TO_LEAF_IDX_END(subtreeIndex); leafIndex++)
+            for (; leafIndex <= lastLeafIndex; leafIndex++)
             {
                 if ((leafIndex == 4) && bUseCachedRegVal)
                 {
@@ -915,7 +926,12 @@ intrGetPendingStallEngines_TU102
     sanityCheckSubtreeMask = intrGetIntrTopLegacyStallMask_HAL(pIntr);
 
     portMemSet(intrLeafValues, 0, numIntrLeaves * sizeof(NvU32));
-    bitVectorClrAll(pEngines);
+
+    // there are cached values in pEngines already, so don't clear it
+    if (!bUseCachedRegVal)
+    {
+        bitVectorClrAll(pEngines);
+    }
 
     // dev_ctrl tree is not used for legacy-vGPU
     if (IS_VIRTUAL_WITHOUT_SRIOV(pGpu))
@@ -923,7 +939,12 @@ intrGetPendingStallEngines_TU102
         return NV_OK;
     }
 
-    NV_ASSERT_OK_OR_RETURN(_intrGetLeafStatus_TU102(pGpu, pIntr, bUseCachedRegVal, cachedStaticRegVal, intrLeafValues, pThreadState));
+    NV_ASSERT_OK_OR_RETURN(_intrGetLeafStatus_TU102(pGpu,
+                                                    pIntr,
+                                                    bUseCachedRegVal,
+                                                    cachedStaticRegVal,
+                                                    intrLeafValues,
+                                                    pThreadState));
     NV_ASSERT_OK_OR_RETURN(intrGetInterruptTable_HAL(pGpu, pIntr, &pIntrTable));
 
     for (iter = vectIterAll(pIntrTable); vectIterNext(&iter);)
@@ -993,12 +1014,64 @@ void intrGetAuxiliaryPendingStall_TU102
     THREAD_STATE_NODE   *pThreadState
 )
 {
-    extern void intrGetAuxiliaryPendingStall_GP100(OBJGPU *pGpu, Intr *pIntr, MC_ENGINE_BITVECTOR *, NvBool bGetAll, NvU16 engIdx, THREAD_STATE_NODE *pThreadState);
-    KernelGmmu *pKernelGmmu = GPU_GET_KERNEL_GMMU(pGpu);
+    KernelGmmu            *pKernelGmmu = GPU_GET_KERNEL_GMMU(pGpu);
+    OBJTMR                *pTmr = GPU_GET_TIMER(pGpu);
+    KernelDisplay         *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
+    KernelGraphicsManager *pKernelGraphicsManager = GPU_GET_KERNEL_GRAPHICS_MANAGER(pGpu);
+    NvU8 i;
 
-    intrGetAuxiliaryPendingStall_GP100(pGpu, pIntr, pEngines, bGetAll, engIdx, pThreadState);
+    if ((bGetAll || (engIdx == MC_ENGINE_IDX_VGPU)) &&
+        (IS_VIRTUAL(pGpu) && vgpuGetPendingEvent(pGpu, pThreadState)))
+    {
+        bitVectorSet(pEngines, MC_ENGINE_IDX_VGPU);
+    }
 
-    if ((bGetAll || engIdx == MC_ENGINE_IDX_GMMU) && pKernelGmmu != NULL)
+    // No register reads here, no need to filter on engIdx
+    if ((pKernelDisplay != NULL) && kdispGetDeferredVblankHeadMask(pKernelDisplay))
+    {
+        // Deferred vblank is pending which we need to handle
+        if (pKernelDisplay->getProperty(pKernelDisplay, PDB_PROP_KDISP_HAS_SEPARATE_LOW_LATENCY_LINE))
+            bitVectorSet(pEngines, MC_ENGINE_IDX_DISP_LOW);
+        else
+            bitVectorSet(pEngines, MC_ENGINE_IDX_DISP);
+    }
+
+    // No register reads here, no need to filter on engIdx
+    if ((pKernelGraphicsManager != NULL) && (fecsGetCtxswLogConsumerCount(pGpu, pKernelGraphicsManager) > 0))
+    {
+        //
+        // WARNING: This loop must not call any GR HALs or
+        //          access any PGRAPH registers
+        //
+        for (i = 0; i < GPU_MAX_GRS; i++)
+        {
+            KernelGraphics *pKernelGraphics = GPU_GET_KERNEL_GRAPHICS(pGpu, i);
+            if ((pKernelGraphics != NULL) &&
+                kgraphicsIsIntrDrivenCtxswLoggingEnabled(pGpu, pKernelGraphics) &&
+                fecsIsIntrPending(pGpu, pKernelGraphics))
+            {
+                bitVectorSet(pEngines, MC_ENGINE_IDX_GRn_FECS_LOG(i));
+            }
+        }
+    }
+
+    if ((bGetAll || (engIdx == MC_ENGINE_IDX_TMR)) && (pTmr != NULL))
+    {
+        NvU32 retVal;
+
+        tmrGetIntrStatus_HAL(pGpu, pTmr, &retVal, pThreadState);
+        if (retVal != 0)
+        {
+            bitVectorSet(pEngines, MC_ENGINE_IDX_TMR);
+        }
+    }
+
+    if (bGetAll || (engIdx == MC_ENGINE_IDX_GMMU))
+    {
+        intrGetGmmuInterrupts(pGpu, pIntr, pEngines, pThreadState);
+    }
+
+    if ((bGetAll || (engIdx == MC_ENGINE_IDX_GMMU)) && (pKernelGmmu != NULL))
     {
         NvBool bRmOwnsReplayableFault = !!(pKernelGmmu->uvmSharedIntrRmOwnsMask & RM_UVM_SHARED_INTR_MASK_MMU_REPLAYABLE_FAULT_NOTIFY);
         NvBool bRmOwnsAccessCntr      = !!(pKernelGmmu->uvmSharedIntrRmOwnsMask & RM_UVM_SHARED_INTR_MASK_HUB_ACCESS_COUNTER_NOTIFY);
@@ -1202,13 +1275,22 @@ intrGetPendingDispLowLatencyAndStaticReg_TU102
 
     if (pIntr->displayIntrVector == NV_INTR_VECTOR_INVALID)
     {
+        *pStaticRegVal = val;
         return NV_OK;
     }
 
     bit = NV_CTRL_INTR_GPU_VECTOR_TO_LEAF_BIT(pIntr->displayIntrVector);
 
-    if (val & NVBIT(bit))
+    if (val & NVBIT32(bit))
         bitVectorSet(pEngines, MC_ENGINE_IDX_DISP);
+
+    //
+    // Clear the value since it is already evaluated into the pEngines and we don't
+    // want to re-evaluate it from the static reg later
+    // on turing, we still do want to evaluate this for non-low latency
+    // and that is already taken into account in the  pEngines that we return
+    //
+    *pStaticRegVal = (val &~ NVBIT32(bit));
 
     return NV_OK;
 }
@@ -1453,6 +1535,9 @@ intrGetIntrTopNonStallMask_TU102
     ct_assert(NV_CPU_INTR_NOSTALL_SUBTREE_HIGHEST < NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF__SIZE_1);
     ct_assert(NV_CPU_INTR_NOSTALL_SUBTREE_HIGHEST < NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF_EN_SET__SIZE_1);
     ct_assert(NV_CPU_INTR_NOSTALL_SUBTREE_HIGHEST < NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF_EN_CLEAR__SIZE_1);
+
+    // Guarantee that there is only one INTR_TOP for intrGetPendingNonStall_TU102
+    ct_assert(NV_CPU_INTR_NOSTALL_SUBTREE_HIGHEST < 32);
 
     NvU64 mask = intrGetIntrTopCategoryMask(pIntr,
         NV2080_INTR_CATEGORY_ESCHED_DRIVEN_ENGINE_NOTIFICATION);

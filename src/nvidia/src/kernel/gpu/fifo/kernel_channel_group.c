@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -21,12 +21,14 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+
 #include "kernel/gpu/fifo/kernel_channel_group.h"
 #include "kernel/gpu/fifo/kernel_fifo.h"
 #include "platform/sli/sli.h"
 #include "containers/eheap_old.h"
 
 #include "ctrl/ctrla06c.h"  // NVA06C_CTRL_INTERLEAVE_LEVEL_*
+
 
 // Static functions
 static void _kchangrpFreeAllEngCtxDescs(OBJGPU *pGpu, KernelChannelGroup *pKernelChannelGroup);
@@ -105,7 +107,10 @@ kchangrpInit_IMPL
     OBJGPU                *pGpu,
     KernelChannelGroup    *pKernelChannelGroup,
     OBJVASPACE            *pVAS,
-    NvU32                  gfid
+    NvU32                  gfid,
+    NvBool                 bFixedGrpID,
+    NvU32                  requestedGrpID,
+    NvBool                 bGspOwned
 )
 {
     NV_STATUS         status       = NV_OK;
@@ -121,8 +126,6 @@ kchangrpInit_IMPL
 
     // Initialize subctx bitmasks, state mask and interleave level
     {
-        NvU32 subDeviceCount = gpumgrGetSubDeviceMaxValuePlus1(pGpu);
-
         pKernelChannelGroup->ppSubctxMask = portMemAllocNonPaged(
             subDeviceCount * (sizeof *pKernelChannelGroup->ppSubctxMask));
         pKernelChannelGroup->ppZombieSubctxMask = portMemAllocNonPaged(
@@ -146,6 +149,11 @@ kchangrpInit_IMPL
                    subDeviceCount * (sizeof *pKernelChannelGroup->pStateMask));
         portMemSet(pKernelChannelGroup->pInterleaveLevel, 0,
                    subDeviceCount * (sizeof *pKernelChannelGroup->pInterleaveLevel));
+
+        // SLI is not supported; TSGs use a single subdevice entry.
+        NV_ASSERT(subDeviceCount == 1);
+        pKernelChannelGroup->pInterleaveLevel[0] =
+            KCHANGRP_DEFAULT_INTERLEAVE_LEVEL;
     }
 
     // Determine initial runlist for this TSG, using engine type if provided
@@ -170,15 +178,16 @@ kchangrpInit_IMPL
 
     pChidMgr = kfifoGetChidMgr(pGpu, pKernelFifo, runlistId);
 
-    NV_ASSERT_OK_OR_RETURN(kfifoChidMgrAllocChannelGroupHwID(pGpu, pKernelFifo, pChidMgr, &grpID));
+    if (bFixedGrpID)
+    {
+        grpID = requestedGrpID;
+    }
+
+    NV_ASSERT_OK_OR_RETURN(kfifoChidMgrAllocChannelGroupHwID(pGpu, pKernelFifo,
+                           pChidMgr, &grpID, bFixedGrpID, bGspOwned));
 
     pKernelChannelGroup->grpID = grpID;
     pKernelChannelGroup->timesliceUs = kfifoChannelGroupGetDefaultTimeslice_HAL(pKernelFifo);
-
-    NV_ASSERT_OK_OR_GOTO(status,
-        kfifoChannelGroupSetTimeslice(pGpu, pKernelFifo, pKernelChannelGroup,
-            pKernelChannelGroup->timesliceUs, NV_TRUE),
-        failed);
 
     NV_ASSERT_OK_OR_GOTO(status,
         kfifoChannelListCreate(pGpu, pKernelFifo, &pKernelChannelGroup->pChanList),
@@ -220,7 +229,7 @@ kchangrpInit_IMPL
     // Subcontext mode is now enabled on all chips.
     pKernelChannelGroup->bLegacyMode = NV_FALSE;
 
-    // We cache the TSG VAS to support legacy mode
+    // We cache the TSG VAS to support legacy mode.
     pKernelChannelGroup->pVAS = pVAS;
     pKernelChannelGroup->gfid = gfid;
 
@@ -247,7 +256,7 @@ kchangrpInit_IMPL
     if (status != NV_OK)
     {
         NV_PRINTF(LEVEL_ERROR,
-                  " Fault method buffer allocation failed for group ID 0x%0x with status 0x%0x\n",
+                  " Fault method buffer allocation failed for group ID 0x%08x with status 0x%08x\n",
                   grpID, status);
         DBG_BREAKPOINT();
         goto failed;
@@ -267,7 +276,7 @@ kchangrpInit_IMPL
             if (status != NV_OK)
             {
                 NV_PRINTF(LEVEL_ERROR,
-                          " Fault method buffer BAR2 mapping failed for group ID 0x%0x with status 0x%0x\n",
+                          " Fault method buffer BAR2 mapping failed for group ID 0x%08x with status 0x%08x\n",
                           grpID, status);
                 DBG_BREAKPOINT();
                 goto failed;
@@ -395,12 +404,12 @@ kchangrpDestroy_IMPL
         // bUsePerRunlistChram is set. If it is not set,
         // it will be ignored by the subsequent call to fifoChidMgrGet anyway
         //
-        NV_ASSERT_OK_OR_RETURN(
-            kfifoEngineInfoXlate_HAL(pGpu, pKernelFifo,
-                                     ENGINE_INFO_TYPE_RM_ENGINE_TYPE,
-                                     pKernelChannelGroup->engineType,
-                                     ENGINE_INFO_TYPE_RUNLIST,
-                                     &runlistId));
+        status = kfifoEngineInfoXlate_HAL(pGpu, pKernelFifo,
+                                         ENGINE_INFO_TYPE_RM_ENGINE_TYPE,
+                                         pKernelChannelGroup->engineType,
+                                         ENGINE_INFO_TYPE_RUNLIST,
+                                         &runlistId);
+        NV_ASSERT_OK_OR_RETURN(status);
     }
 
     pChidMgr = kfifoGetChidMgr(pGpu, pKernelFifo, runlistId);
@@ -527,7 +536,6 @@ kchangrpAddChannel_IMPL
     NV_STATUS       status;
     KernelFifo     *pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
     NvU32           maxChanCount;
-    NvU32           subdevInst = gpumgrGetSubDeviceInstanceFromGpu(pGpu);
     KernelCtxShare *pKernelCtxShare;
 
 
@@ -574,9 +582,9 @@ kchangrpAddChannel_IMPL
 
     // Initialize channel's interleave level to match TSG's
     NV_ASSERT_OK_OR_RETURN(
-        kchangrpSetInterleaveLevel(pGpu,
-                             pKernelChannelGroup,
-                             pKernelChannelGroup->pInterleaveLevel[subdevInst]));
+            kchangrpSetInterleaveLevelInternal(pGpu,
+                                pKernelChannelGroup,
+                                pKernelChannelGroup->pInterleaveLevel[gpumgrGetSubDeviceInstanceFromGpu(pGpu)]));
 
     return NV_OK;
 }
@@ -645,26 +653,47 @@ kchangrpRemoveChannel_IMPL
                     index);
             }
         }
+
     }
 
     return NV_OK;
 }
 
 
-/**
- * @brief Set interleave level for channel group
- *
- * This function sets interleave level for channel group
- * and also updates interleave level for all channels
- *
- * @param pGpu
- * @param pKernelChannelGroup
- * @param value
- *
- * @returns NV_OK on success
- */
+/** Set a client-requested interleave level for a channel group. */
 NV_STATUS
 kchangrpSetInterleaveLevel_IMPL
+(
+    OBJGPU             *pGpu,
+    KernelChannelGroup *pKernelChannelGroup,
+    NvU32               value
+)
+{
+    NV_STATUS status;
+
+    status = kfifoValidateInterleaveLevelAccess(pGpu, value);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    //
+    // The level is accepted and recorded regardless of whether the TSG's
+    // runlist currently consumes it. It has a scheduling effect only where
+    // the runlist is built with an interleaved policy; elsewhere (MIG
+    // GPU-instance runlists, vGPU guest runlists behind OBJSCHED_SW /
+    // OBJSCHED_VFS, non-gr runlists, DEFAULT-policy runlists) it is inert
+    // bookkeeping, matching the pre-existing control behavior. Returning an
+    // error for such configurations would fail compute clients that apply
+    // the global scheduling-priority policy at context creation, and the
+    // recorded level becomes effective if the runlist policy later changes.
+    //
+    return kchangrpSetInterleaveLevelInternal(pGpu, pKernelChannelGroup, value);
+}
+
+/** Set an interleave level for internal scheduler bookkeeping. */
+NV_STATUS
+kchangrpSetInterleaveLevelInternal_IMPL
 (
     OBJGPU             *pGpu,
     KernelChannelGroup *pKernelChannelGroup,
@@ -685,6 +714,12 @@ kchangrpSetInterleaveLevel_IMPL
 
             NV_ASSERT_OK_OR_RETURN(kchangrpSetInterleaveLevelSched(pGpu,
                                               pKernelChannelGroup, value));
+            NV_PRINTF(LEVEL_INFO,
+                      "kchangrpSetInterleaveLevel: engineType=%u grpID=%u runlist=%u level=%u\n",
+                      pKernelChannelGroup->engineType,
+                      pKernelChannelGroup->grpID,
+                      pKernelChannelGroup->runlistId,
+                      value);
             break;
         default:
             return NV_ERR_INVALID_ARGUMENT;
@@ -776,4 +811,80 @@ kchangrpGetEngineContextMemDesc_IMPL
 FIFO_TSG_INFO kchangrpGetInfo_IMPL(KernelChannelGroup *pKernelChannelGroup)
 {
     return (FIFO_TSG_INFO){pKernelChannelGroup->grpID, pKernelChannelGroup->runlistId};
+}
+
+void
+kchangrpSetSubcontextZombieState_IMPL
+(
+    OBJGPU             *pGpu,
+    KernelChannelGroup *pKernelChannelGroup,
+    NvU32               subctxId,
+    NvBool              bZombie
+)
+{
+    KernelFifo *pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
+    NvU32 dWordSize, dWordIndex, bitIndex, subDevInst;
+
+    if (!kfifoIsZombieSubctxWarEnabled(pKernelFifo))
+        return;
+
+    dWordSize = NV_NBITS_IN_TYPE(NvU32);
+    dWordIndex = subctxId / dWordSize;
+    bitIndex = subctxId % dWordSize;
+
+    subDevInst = gpumgrGetSubDeviceInstanceFromGpu(pGpu);
+    if (bZombie)
+    {
+        pKernelChannelGroup->ppZombieSubctxMask[subDevInst][dWordIndex] |= NVBIT32(bitIndex);
+    }
+    else
+    {
+        pKernelChannelGroup->ppZombieSubctxMask[subDevInst][dWordIndex] &= ~(NVBIT32(bitIndex));
+    }
+}
+
+NvBool
+kchangrpGetSubcontextZombieState_IMPL
+(
+    OBJGPU             *pGpu,
+    KernelChannelGroup *pKernelChannelGroup,
+    NvU32               subctxId
+)
+{
+    KernelFifo *pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
+    NvU32 dWordSize, dWordIndex, bitIndex, subdevInst, mask;
+
+    if (!kfifoIsZombieSubctxWarEnabled(pKernelFifo))
+        return NV_FALSE;
+
+    dWordSize = NV_NBITS_IN_TYPE(NvU32);
+    dWordIndex = subctxId / dWordSize;
+    bitIndex = subctxId % dWordSize;
+
+    subdevInst = gpumgrGetSubDeviceInstanceFromGpu(pGpu);
+    mask = pKernelChannelGroup->ppZombieSubctxMask[subdevInst][dWordIndex];
+
+    return ((mask & NVBIT32(bitIndex)) != 0);
+}
+
+/**
+ * @brief Sched interleave level for channel group
+ *
+ * This function updates the TSG interleave level in the scheduler.
+ *
+ * @param pGpu
+ * @param pKernelChannelGroup
+ * @param value
+ *
+ * @returns NV_OK on success
+ */
+NV_STATUS kchangrpSetInterleaveLevelSched_IMPL
+(
+    OBJGPU             *pGpu,
+    KernelChannelGroup *pKernelChannelGroup,
+    NvU32 value
+)
+{
+
+    return NV_OK;
 }

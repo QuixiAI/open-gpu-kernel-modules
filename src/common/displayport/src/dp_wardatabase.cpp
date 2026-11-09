@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -96,6 +96,12 @@ void ConnectorImpl::applyOuiWARs()
 
 void ConnectorImpl2x::applyOuiWARs()
 {
+    //
+    // The regkey only extends the SW auto-read WAR to any OUI.
+    // It does not bypass the DP tunneling or RM capability checks.
+    //
+    bool bSwAutoReadWarNeeded = main->getRegkeyDatabase().bEnableDpTunSwAutoReadWarAllSinks;
+
     switch (ouiId)
     {
         // Novatek Microelectronics Corp.
@@ -126,6 +132,20 @@ void ConnectorImpl2x::applyOuiWARs()
             }
             break;
 
+        //
+        // Realtek DP sink (OUI 00:E0:4C), any model.
+        //
+        case 0x4CE000:
+            bSwAutoReadWarNeeded = true;
+            break;
+    }
+
+    if (bSwAutoReadWarNeeded &&
+        hal->isDpInTunnelingSupported() &&
+        main->isDpTunnelingHwBugWarEnabled())
+    {
+        main->setDpWarFlag(NV0073_CTRL_DP_WAR_SW_AUTO_READ_ENABLE, true);
+        this->bSwAutoReadWarActive = true;
     }
 }
 
@@ -578,10 +598,19 @@ void Edid::applyEdidWorkArounds(NvU32 warFlag, const DpMonitorDenylistData *pDen
 
         // Unigraf
         case 0xC754:
+            {
+                DP_PRINTF(DP_NOTICE, "DP-WAR> Unigraf device, keep link alive during detection and force max link config during mode-set\n");
+                this->WARFlags.keepLinkAlive = true;
+                this->WARFlags.forceMaxLinkConfig = true;
+            }
+            break;
+
+        // M42De 
         case 0x1863:
             {
-                DP_PRINTF(DP_NOTICE, "DP-WAR> Unigraf device, keep link alive during detection\n");
+                DP_PRINTF(DP_NOTICE, "DP-WAR> M42De device, keep link alive during detection and force max link config during mode-set\n");
                 this->WARFlags.keepLinkAlive = true;
+                this->WARFlags.forceMaxLinkConfig = true;
             }
             break;
 

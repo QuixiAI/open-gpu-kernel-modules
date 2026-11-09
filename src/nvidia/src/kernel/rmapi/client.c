@@ -90,7 +90,6 @@ rmclientConstruct_IMPL
     pClient->pSecurityToken  = NULL;
     pClient->pOSInfo         = pSecInfo->clientOSInfo;
     pClient->imexChannel     = -1;
-    pClient->clientGfid      = GPU_GFID_PF;
 
     pClient->cachedPrivilege = pSecInfo->privLevel;
 
@@ -109,12 +108,33 @@ rmclientConstruct_IMPL
     }
     else
     {
-        pClient->ProcID = osGetCurrentProcess();
+        if ((pSecInfo->procIDOverride != 0) ||
+            (pSecInfo->procIDOverrideMagic != 0))
+        {
+            NV_ASSERT(pSecInfo->procIDOverrideMagic == API_SECURITY_INFO_PROC_ID_OVERRIDE_MAGIC);
+            NV_ASSERT(pSecInfo->procIDOverride != 0);
+            NV_ASSERT(pClient->cachedPrivilege >= RS_PRIV_LEVEL_KERNEL);
+        }
+
+        if ((pSecInfo->procIDOverride != 0) &&
+            (pSecInfo->procIDOverrideMagic == API_SECURITY_INFO_PROC_ID_OVERRIDE_MAGIC) &&
+            (pClient->cachedPrivilege >= RS_PRIV_LEVEL_KERNEL))
+        {
+            pClient->ProcID = pSecInfo->procIDOverride;
+        }
+        else
+        {
+            pClient->ProcID = osGetCurrentProcess();
+        }
+
         if (pClient->cachedPrivilege <= RS_PRIV_LEVEL_USER_ROOT)
+        {
             pClient->pOsPidInfo = osGetPidInfo();
+        }
     }
 
-    // Set user-friendly client name from current process
+    // Set user-friendly client name from current process. With ProcID override,
+    // ProcID tracks the intended owner while name reflects this creation context.
     osGetCurrentProcessName(pClient->name, NV_PROC_NAME_MAX_LENGTH);
 
     for (i = 0; i < NV0000_NOTIFIERS_MAXCOUNT; i++)
@@ -706,9 +726,12 @@ _registerUserInfo
 
         if (listAppendValue(&g_userInfoList, (void*)&pUserInfo) == NULL)
         {
+            // Registration failed, so the caller retains ownership.
+            pUserInfo->pUidToken = NULL;
             serverFreeShare(&g_resServ, pShared);
             return NV_ERR_INSUFFICIENT_RESOURCES;
         }
+        *ppUidToken = NULL;
     }
     else
     {
@@ -899,6 +922,11 @@ static NvBool _rmclientIsCapable
         case NV_RM_CAP_SYS_FABRIC_IMEX_MGMT:
         {
             internalClassId = classId(ImexSessionApi);
+            break;
+        }
+        case NV_RM_CAP_SYS_MNCC_MGMT:
+        {
+            internalClassId = classId(MnccSession);
             break;
         }
         case NV_RM_CAP_SYS_SMC_MONITOR:

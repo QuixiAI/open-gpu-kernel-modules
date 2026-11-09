@@ -42,10 +42,12 @@
 #include "ctrl/ctrl2080/ctrl2080mc.h"               /* NV2080_INTR_* */
 #include "ctrl/ctrl0073/ctrl0073system.h"           /* NV0073_CTRL_SYSTEM_ACPI_ID_MAP_MAX_DISPLAYS */
 #include "ctrl/ctrl0000/ctrl0000system.h"
-#include "ctrl/ctrl2080/ctrl2080nvlink_common.h"   /* NV2080_CTRL_NVLINK_LINK_MASK */
-#include "ctrl/ctrl2080/ctrl2080nvlink.h"         /* NV2080_CTRL_NVLINK_GET_SUPPORTED_COUNTERS_PARAMS */
+#include "ctrl/ctrl2080/ctrl2080nvlink_common.h"    /* NV2080_CTRL_NVLINK_LINK_MASK */
+#include "ctrl/ctrl2080/ctrl2080nvlink.h"           /* NV2080_CTRL_NVLINK_GET_SUPPORTED_COUNTERS_PARAMS */
+#include "ctrl/ctrl2080/ctrl2080boardobj.h"
 #include "ctrl/ctrl90f1.h"
 #include "ctrl/ctrl30f1.h"
+
 #include "nvcfg_sdk.h"
 
 /*!
@@ -137,7 +139,26 @@ typedef struct NV2080_CTRL_INTERNAL_MEMSYS_GET_STATIC_CONFIG_PARAMS {
 /*!
  * Retrieve Memory System Static data.
  */
-#define NV2080_CTRL_CMD_INTERNAL_MEMSYS_GET_STATIC_CONFIG        (0x20800a1c) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_MEMSYS_GET_STATIC_CONFIG_PARAMS_MESSAGE_ID" */
+#define NV2080_CTRL_CMD_INTERNAL_MEMSYS_GET_STATIC_CONFIG           (0x20800a1c) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_MEMSYS_GET_STATIC_CONFIG_PARAMS_MESSAGE_ID" */
+
+/*
+ * NV2080_CTRL_CMD_INTERNAL_UVM_GET_ACCESS_CNTR_BUFFER_ENABLED
+ *
+ * This command retrieves whether physical RM allows access counter buffer setup.
+ *
+ * bFbhubAccessCntrRegisterAccessEnabled
+ *   Whether FBHUB access counter register access is enabled.
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ */
+#define NV2080_CTRL_CMD_INTERNAL_UVM_GET_ACCESS_CNTR_BUFFER_ENABLED (0x20800a0f) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_UVM_GET_ACCESS_CNTR_BUFFER_ENABLED_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_INTERNAL_UVM_GET_ACCESS_CNTR_BUFFER_ENABLED_PARAMS_MESSAGE_ID (0xFU)
+
+typedef struct NV2080_CTRL_INTERNAL_UVM_GET_ACCESS_CNTR_BUFFER_ENABLED_PARAMS {
+    NvBool bFbhubAccessCntrRegisterAccessEnabled;
+} NV2080_CTRL_INTERNAL_UVM_GET_ACCESS_CNTR_BUFFER_ENABLED_PARAMS;
 
 /*
  * NV2080_CTRL_CMD_INTERNAL_REGISTER_UVM_ACCESS_CNTR_BUFFER
@@ -227,6 +248,7 @@ typedef struct NV2080_CTRL_INTERNAL_STATIC_GR_GLOBAL_SM_ORDER {
         NvU16 localSmId;
         NvU16 globalTpcId;
         NvU16 virtualGpcId;
+        NvU16 virtualDpcId;
         NvU16 migratableTpcId;
         NvU16 ugpuId;
         NvU16 physicalCpcId;
@@ -287,7 +309,7 @@ typedef struct NV2080_CTRL_INTERNAL_NVENC_GET_CAPS_PARAMS {
 
 
 #define NV2080_CTRL_INTERNAL_GR_MAX_GPC                            64
-#define NV2080_CTRL_INTERNAL_MAX_TPC_PER_GPC_COUNT                 10
+#define NV2080_CTRL_INTERNAL_MAX_TPC_PER_GPC_COUNT                 32
 
 /*!
  * @ref NV2080_CTRL_CMD_GR_GET_GPC_MASK
@@ -565,31 +587,21 @@ typedef struct NV2080_CTRL_INTERNAL_STATIC_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS 
 
 typedef NV2080_CTRL_INTERNAL_STATIC_GR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS NV2080_CTRL_INTERNAL_STATIC_KGR_GET_SM_ISSUE_RATE_MODIFIER_PARAMS;
 
-/*
- * NV2080_CTRL_INTERNAL_GPU_GET_CHIP_INFO_PARAMS
+/**
+ * NV2080_CTRL_CMD_INTERNAL_GPU_SYNC_FABRIC_PROBE_INFO
  *
- * This command obtains information from physical RM for use by CPU-RM.
+ * Sync fabric probe info received from fabric probe response/update with physical gpu fabric probe
+ *
+ * linkMaskToBeReduced
+ *      Bit vector of unused Nvlink links for P2P
  */
+#define NV2080_CTRL_CMD_INTERNAL_GPU_SYNC_FABRIC_PROBE_INFO_PARAMS_MESSAGE_ID (0x36U)
 
-#define NV2080_CTRL_CMD_INTERNAL_GPU_GET_CHIP_INFO      (0x20800a36) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_GPU_GET_CHIP_INFO_PARAMS_MESSAGE_ID" */
+typedef struct NV2080_CTRL_CMD_INTERNAL_GPU_SYNC_FABRIC_PROBE_INFO_PARAMS {
+    NV_DECLARE_ALIGNED(NV2080_CTRL_NVLINK_LINK_MASK linkMaskToBeReduced, 8);
+} NV2080_CTRL_CMD_INTERNAL_GPU_SYNC_FABRIC_PROBE_INFO_PARAMS;
 
-/*
- * Maximum number of register bases to return.
- * These are indexed by NV_REG_BASE_* constants from gpu.h, and this value needs
- * to be updated if NV_REG_BASE_LAST ever goes over it. See the ct_assert() in gpu.h
- */
-#define NV2080_CTRL_INTERNAL_GET_CHIP_INFO_REG_BASE_MAX 16
-#define NV2080_CTRL_INTERNAL_GPU_GET_CHIP_INFO_PARAMS_MESSAGE_ID (0x36U)
-
-typedef struct NV2080_CTRL_INTERNAL_GPU_GET_CHIP_INFO_PARAMS {
-    NvU8   chipSubRev;
-    NvU32  emulationRev1;
-    NvBool isCmpSku;
-    NvU32  pciDeviceId;
-    NvU32  pciSubDeviceId;
-    NvU32  pciRevisionId;
-    NvU32  regBases[NV2080_CTRL_INTERNAL_GET_CHIP_INFO_REG_BASE_MAX];
-} NV2080_CTRL_INTERNAL_GPU_GET_CHIP_INFO_PARAMS;
+#define NV2080_CTRL_CMD_INTERNAL_GPU_SYNC_FABRIC_PROBE_INFO  (0x20800a36) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_CMD_INTERNAL_GPU_SYNC_FABRIC_PROBE_INFO_PARAMS_MESSAGE_ID" */
 
 /**
  * NV2080_CTRL_CMD_INTERNAL_GR_SET_FECS_TRACE_HW_ENABLE
@@ -1459,6 +1471,11 @@ typedef struct NV2080_CTRL_INTERNAL_FB_GET_HEAP_RESERVATION_SIZE_PARAMS {
  *
  *   subtreeMap [OUT]
  *     Subtree mask for each NV2080_INTR_CATEGORY.
+ *
+ *   disabledGinMessage [OUT]
+ *     The last implemented CPU interrupt vector (numCpuVectors - 1).
+ *     Used by Kernel RM as an unserviced placeholder vector for preempt
+ *     register writes when a real notification vector is not applicable.
  */
 #define NV2080_CTRL_CMD_INTERNAL_INTR_GET_KERNEL_TABLE (0x20800a5c) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_INTR_GET_KERNEL_TABLE_PARAMS_MESSAGE_ID" */
 
@@ -1477,6 +1494,7 @@ typedef struct NV2080_CTRL_INTERNAL_INTR_GET_KERNEL_TABLE_PARAMS {
     NvU32                                            tableLen;
     NV2080_CTRL_INTERNAL_INTR_GET_KERNEL_TABLE_ENTRY table[NV2080_CTRL_INTERNAL_INTR_MAX_TABLE_SIZE];
     NV_DECLARE_ALIGNED(NV2080_INTR_CATEGORY_SUBTREE_MAP subtreeMap[NV2080_INTR_CATEGORY_ENUM_COUNT], 8);
+    NvU32                                            disabledGinMessage;
 } NV2080_CTRL_INTERNAL_INTR_GET_KERNEL_TABLE_PARAMS;
 
 /* Index to retrieve the needed heap space for specific module */
@@ -2297,10 +2315,16 @@ typedef struct NV2080_CTRL_INTERNAL_HSHUB_NEXT_HSHUB_ID_PARAMS {
 /*!
  * NV2080_CTRL_CMD_INTERNAL_HSHUB_EGM_CONFIG
  *
- * Program HSHUB for EGM peer id.
+ * Program HSHUB and configure GSP-RM local EGM state.
  *
  *    egmPeerId[IN]
  *      EGM peer id to program in the HSHUB registers.
+ *    egmPhysAddr[IN]
+ *      Base system physical address of the local EGM region.
+ *    egmSize[IN]
+ *      Size of the local EGM region.
+ *    egmNodeId[IN]
+ *      NUMA node corresponding to the local EGM region.
  *
  * Possible status values returned are:
  *   NV_OK
@@ -2311,6 +2335,9 @@ typedef struct NV2080_CTRL_INTERNAL_HSHUB_NEXT_HSHUB_ID_PARAMS {
 
 typedef struct NV2080_CTRL_INTERNAL_HSHUB_EGM_CONFIG_PARAMS {
     NvU32 egmPeerId;
+    NV_DECLARE_ALIGNED(NvU64 egmPhysAddr, 8);
+    NV_DECLARE_ALIGNED(NvU64 egmSize, 8);
+    NvS32 egmNodeId;
 } NV2080_CTRL_INTERNAL_HSHUB_EGM_CONFIG_PARAMS;
 
 /*
@@ -2563,6 +2590,13 @@ typedef struct NV2080_CTRL_INTERNAL_REMOVE_P2P_CAPS_PARAMS {
  *         P2P Capability is disabled by a regkey.
  *       NV0000_P2P_CAPS_STATUS_NOT_SUPPORTED
  *         P2P Capability is not supported.
+ *   [out] bSkipChipsetCheck
+ *     Indicates if the caller should not check for chipset's P2P capabilities.
+ *   [out] bPcieP2PFuseDisabled
+ *     Indicates PCIe P2P is disabled by GPU fuse.
+ *     This is diagnostic metadata for SLI system-property reporting only;
+ *     p2pReadCapsStatus and p2pWriteCapsStatus remain the source of truth for
+ *     P2P capability decisions.
  *
  * Possible status values returned are:
  *   NV_OK
@@ -2577,6 +2611,8 @@ typedef struct NV2080_CTRL_INTERNAL_GET_PCIE_P2P_CAPS_PARAMS {
     NvBool bCommonPciSwitchFound;
     NvU8   p2pReadCapsStatus;
     NvU8   p2pWriteCapsStatus;
+    NvBool bSkipChipsetCheck;
+    NvBool bPcieP2PFuseDisabled;
 } NV2080_CTRL_INTERNAL_GET_PCIE_P2P_CAPS_PARAMS;
 
 /*!
@@ -2997,9 +3033,10 @@ typedef struct NV2080_CTRL_INTERNAL_MEMMGR_GET_VGPU_CONFIG_HOST_RESERVED_FB_PARA
 #define NV2080_CTRL_INTERNAL_INIT_BRIGHTC_STATE_LOAD_PARAMS_MESSAGE_ID (0xC6U)
 
 typedef struct NV2080_CTRL_INTERNAL_INIT_BRIGHTC_STATE_LOAD_PARAMS {
-    NvU32 status;
-    NvU16 backLightDataSize;
-    NvU8  backLightData[NV2080_CTRL_ACPI_DSM_READ_SIZE];
+    NvU32  status;
+    NvBool bNitsPwmFallbackEnabled;
+    NvU16  backLightDataSize;
+    NvU8   backLightData[NV2080_CTRL_ACPI_DSM_READ_SIZE];
 } NV2080_CTRL_INTERNAL_INIT_BRIGHTC_STATE_LOAD_PARAMS;
 
 /*
@@ -4046,6 +4083,8 @@ typedef struct NV2080_CTRL_INTERNAL_USER_SHARED_DATA_SET_DATA_POLL_PARAMS {
  *      - size of gsp side logging buffer
  *  bufferWatermark[IN]
  *      - entry threshold for GSP to issue RPC of logged entries to kernel RM
+ *  targetTask[IN]
+ *      - NV_RATS_TARGET_ID to bind the tracing buffer to
  *  flag[IN]
  *      - indicates which operation to perform
  */
@@ -4056,6 +4095,7 @@ typedef struct NV2080_CTRL_CMD_INTERNAL_CONTROL_GSP_TRACE_PARAMS {
     NV_DECLARE_ALIGNED(NvU64 bufferAddr, 8);
     NvU32 bufferSize;
     NvU32 bufferWatermark;
+    NvU16 targetTask;
     NvU8  flag;
 } NV2080_CTRL_CMD_INTERNAL_CONTROL_GSP_TRACE_PARAMS;
 
@@ -4140,6 +4180,29 @@ typedef struct NV2080_CTRL_INTERNAL_GPU_CLIENT_LOW_POWER_MODE_ENTER_PARAMS {
 typedef struct NV2080_CTRL_INTERNAL_NVLINK_POST_FATAL_ERROR_RECOVERY_PARAMS {
     NvBool bSuccessful;
 } NV2080_CTRL_INTERNAL_NVLINK_POST_FATAL_ERROR_RECOVERY_PARAMS;
+
+/*!
+ * NV2080_CTRL_CMD_INTERNAL_NVLINK_LFM_RM_ACTION
+ *
+ * This command is used by CPU-RM to notify GSP-RM that a traffic quiesce/resume
+ * action requested by GSP-RM has completed in CPU-RM.
+ *
+ *   action
+ *     NV2080_CTRL_INTERNAL_NVLINK_LFM_RM_ACTION_QUIESCE_TRAFFIC_DONE
+ *     NV2080_CTRL_INTERNAL_NVLINK_LFM_RM_ACTION_RESUME_TRAFFIC_DONE
+ */
+#define NV2080_CTRL_CMD_INTERNAL_NVLINK_LFM_RM_ACTION                  (0x20800af6) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_NVLINK_LFM_RM_ACTION_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_INTERNAL_NVLINK_LFM_RM_ACTION_QUIESCE_TRAFFIC      0U
+#define NV2080_CTRL_INTERNAL_NVLINK_LFM_RM_ACTION_RESUME_TRAFFIC       1U
+#define NV2080_CTRL_INTERNAL_NVLINK_LFM_RM_ACTION_QUIESCE_TRAFFIC_DONE 2U
+#define NV2080_CTRL_INTERNAL_NVLINK_LFM_RM_ACTION_RESUME_TRAFFIC_DONE  3U
+
+#define NV2080_CTRL_INTERNAL_NVLINK_LFM_RM_ACTION_PARAMS_MESSAGE_ID (0xF6U)
+
+typedef struct NV2080_CTRL_INTERNAL_NVLINK_LFM_RM_ACTION_PARAMS {
+    NvU32 action;
+} NV2080_CTRL_INTERNAL_NVLINK_LFM_RM_ACTION_PARAMS;
 
 /*!
  * NV2080_CTRL_CMD_INTERNAL_GPU_GET_GSP_RM_FREE_HEAP
@@ -4305,6 +4368,7 @@ typedef struct NV2080_CTRL_INTERNAL_NVLINK_ENABLE_NVLINK_PEER_PARAMS {
 #define NV2080_INTERNAL_NVLINK_CORE_LINK_STATE_INITPHASE5               0x1BU
 #define NV2080_INTERNAL_NVLINK_CORE_LINK_STATE_ALI                      0x1CU
 #define NV2080_INTERNAL_NVLINK_CORE_LINK_STATE_ACTIVE_PENDING           0x1DU
+#define NV2080_INTERNAL_NVLINK_CORE_LINK_STATE_PHYSICAL_UP_NO_TRAFFIC   0x1FU
 #define NV2080_INTERNAL_NVLINK_CORE_LINK_STATE_INVALID                  0xFFU
 
 /*
@@ -4675,7 +4739,7 @@ typedef struct NV2080_CTRL_INTERNAL_NVLINK_UPDATE_HSHUB_MUX_PARAMS {
 
 typedef struct NV2080_CTRL_INTERNAL_NVLINK_PRE_SETUP_NVLINK_PEER_PARAMS {
     NvU32  peerId;
-    NV_DECLARE_ALIGNED(NvU64 peerLinkMask, 8);
+    NV_DECLARE_ALIGNED(NV2080_CTRL_NVLINK_LINK_MASK peerLinkMask, 8);
     NvBool bEgmPeer;
     NvBool bNvswitchConn;
 } NV2080_CTRL_INTERNAL_NVLINK_PRE_SETUP_NVLINK_PEER_PARAMS;
@@ -4875,7 +4939,7 @@ typedef struct NV2080_CTRL_INTERNAL_NVLINK_UPDATE_LINK_CONNECTION_PARAMS {
 
 typedef struct NV2080_CTRL_INTERNAL_NVLINK_ENABLE_LINKS_POST_TOPOLOGY_PARAMS {
     NvU32 linkMask;
-    NvU32 initializedLinks;
+    NV_DECLARE_ALIGNED(NV2080_CTRL_NVLINK_LINK_MASK initializedLinks, 8);
 } NV2080_CTRL_INTERNAL_NVLINK_ENABLE_LINKS_POST_TOPOLOGY_PARAMS;
 
 #define NV2080_CTRL_CMD_INTERNAL_NVLINK_ENABLE_LINKS_POST_TOPOLOGY (0x20800a83U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_NVLINK_ENABLE_LINKS_POST_TOPOLOGY_PARAMS_MESSAGE_ID" */
@@ -4897,7 +4961,7 @@ typedef struct NV2080_CTRL_INTERNAL_NVLINK_PRE_LINK_TRAIN_ALI_PARAMS {
 
 #define NV2080_CTRL_CMD_INTERNAL_NVLINK_PRE_LINK_TRAIN_ALI (0x20800a84U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_NVLINK_PRE_LINK_TRAIN_ALI_PARAMS_MESSAGE_ID" */
 
-#define NV2080_CTRL_INTERNAL_NVLINK_MAX_ARR_SIZE           64
+#define NV2080_CTRL_INTERNAL_NVLINK_MAX_ARR_SIZE           128
 
 /*
  * NV2080_CTRL_CMD_INTERNAL_NVLINK_GET_LINK_MASK_POST_RX_DET
@@ -4912,7 +4976,7 @@ typedef struct NV2080_CTRL_INTERNAL_NVLINK_PRE_LINK_TRAIN_ALI_PARAMS {
 #define NV2080_CTRL_INTERNAL_NVLINK_GET_LINK_MASK_POST_RX_DET_PARAMS_MESSAGE_ID (0x85U)
 
 typedef struct NV2080_CTRL_INTERNAL_NVLINK_GET_LINK_MASK_POST_RX_DET_PARAMS {
-    NV_DECLARE_ALIGNED(NvU64 postRxDetLinkMask, 8);
+    NV_DECLARE_ALIGNED(NV2080_CTRL_NVLINK_LINK_MASK postRxDetLinkMask, 8);
     NvU32 laneRxdetStatusMask[NV2080_CTRL_INTERNAL_NVLINK_MAX_ARR_SIZE];
 } NV2080_CTRL_INTERNAL_NVLINK_GET_LINK_MASK_POST_RX_DET_PARAMS;
 
@@ -4963,6 +5027,10 @@ typedef struct NV2080_CTRL_INTERNAL_NVLINK_DEVICE_LINK_VALUES {
  *    IP revision of the NVLink HW
  * [Out] maxSupportedLinks
  *    Maximum number of links supported for a given arch
+  * [Out] linksPerSpigot
+ *    Links per spigot
+ * [Out] discoveredNvlpwMask
+ *    Mask of Nvlpws discovered
  * [Out] linkInfo
  *    Per link information
  * [Out] probeRequestTimeMs
@@ -4980,10 +5048,11 @@ typedef struct NV2080_CTRL_INTERNAL_NVLINK_GET_NVLINK_DEVICE_INFO_PARAMS {
     NV_DECLARE_ALIGNED(NV2080_CTRL_NVLINK_LINK_MASK discoveredLinks, 8);
     NvU32                                          ipVerNvlink;
     NvU32                                          maxSupportedLinks;
+    NvU32                                          linksPerSpigot;
+    NV_DECLARE_ALIGNED(NV2080_CTRL_NVLINK_LINK_MASK discoveredNvlpwMask, 8);
     NvU32                                          probeRequestTimeMs;
     NvU32                                          linkStateChangeTimeMs;
     NV2080_CTRL_INTERNAL_NVLINK_DEVICE_LINK_VALUES linkInfo[NV2080_CTRL_INTERNAL_NVLINK_MAX_ARR_SIZE];
-    NV_DECLARE_ALIGNED(NV2080_CTRL_NVLINK_GET_SUPPORTED_COUNTERS_PARAMS supportedCounterMask, 8);
 } NV2080_CTRL_INTERNAL_NVLINK_GET_NVLINK_DEVICE_INFO_PARAMS;
 
 #define NV2080_CTRL_CMD_INTERNAL_NVLINK_GET_NVLINK_DEVICE_INFO (0x20800a87U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_NVLINK_GET_NVLINK_DEVICE_INFO_PARAMS_MESSAGE_ID" */
@@ -5232,6 +5301,23 @@ typedef struct NV2080_CTRL_INTERNAL_NVLINK_PROCESS_FORCED_CONFIGS_PARAMS {
 } NV2080_CTRL_INTERNAL_NVLINK_PROCESS_FORCED_CONFIGS_PARAMS;
 
 #define NV2080_CTRL_CMD_INTERNAL_NVLINK_PROCESS_FORCED_CONFIGS (0x20800a95U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_NVLINK_PROCESS_FORCED_CONFIGS_PARAMS_MESSAGE_ID" */
+
+
+/*
+ * NV2080_CTRL_CMD_INTERNAL_NVLINK_FORCE_DEBUG_STALL_AND_UPDATE_AMAP
+ *
+ * Force debug stall to quiesce incoming nvlink traffic and update the AMAP config
+ *
+ * [In] peerLinkMask
+ *          mask of links to setup AMAP with
+ */
+#define NV2080_CTRL_INTERNAL_NVLINK_FORCE_DEBUG_STALL_AND_UPDATE_AMAP_PARAMS_MESSAGE_ID (0x9CU)
+
+typedef struct NV2080_CTRL_INTERNAL_NVLINK_FORCE_DEBUG_STALL_AND_UPDATE_AMAP_PARAMS {
+    NV_DECLARE_ALIGNED(NV2080_CTRL_NVLINK_LINK_MASK peerLinkMask, 8);
+} NV2080_CTRL_INTERNAL_NVLINK_FORCE_DEBUG_STALL_AND_UPDATE_AMAP_PARAMS;
+
+#define NV2080_CTRL_CMD_INTERNAL_NVLINK_FORCE_DEBUG_STALL_AND_UPDATE_AMAP (0x20800b9cU) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_2_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_NVLINK_FORCE_DEBUG_STALL_AND_UPDATE_AMAP_PARAMS_MESSAGE_ID" */
 
 /*
  * NV2080_CTRL_CMD_INTERNAL_NVLINK_SYNC_NVLINK_SHUTDOWN_PROPS
@@ -5494,7 +5580,21 @@ typedef NV2080_CTRL_CMD_FIFO_ROTATE_KEYS_PARAMS NV2080_CTRL_CMD_INTERNAL_CONF_CO
  * This command accepts no parameters.
  *
  */
-#define NV2080_CTRL_CMD_INTERNAL_NVLINK_RC_USER_MODE_CHANNELS     (0x20800b08) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_2_INTERFACE_ID << 8) | 0x08" */
+#define NV2080_CTRL_CMD_INTERNAL_NVLINK_RC_USER_MODE_CHANNELS (0x20800b08) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_2_INTERFACE_ID << 8) | 0x08" */
+
+/*!
+ * NV2080_CTRL_CMD_INTERNAL_NVLINK_RESUME_DISABLE_CHANNELS
+ *
+ * This command is used to resume / disable user mode channels during nvlink
+ * resiliency flows
+ *
+ */
+#define NV2080_CTRL_INTERNAL_NVLINK_RESUME_DISABLE_CHANNELS_PARAMS_MESSAGE_ID (0xADU)
+
+typedef struct NV2080_CTRL_INTERNAL_NVLINK_RESUME_DISABLE_CHANNELS_PARAMS {
+    NvBool bEnable;
+} NV2080_CTRL_INTERNAL_NVLINK_RESUME_DISABLE_CHANNELS_PARAMS;
+#define NV2080_CTRL_CMD_INTERNAL_NVLINK_RESUME_DISABLE_CHANNELS   (0x20800bad) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_2_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_NVLINK_RESUME_DISABLE_CHANNELS_PARAMS_MESSAGE_ID" */
 
 /*
  * NV2080_CTRL_CMD_INTERNAL_GSYNC_GET_POSSIBLE_REFRESH_RATES
@@ -5585,5 +5685,127 @@ typedef struct NV2080_CTRL_INTERNAL_UCODE_INSTRUMENTATION_GET_DATA_PARAMS {
     NvU32  dataSize;
     NvBool bComplete;
 } NV2080_CTRL_INTERNAL_UCODE_INSTRUMENTATION_GET_DATA_PARAMS;
+
+/*!
+ * NV2080_CTRL_CMD_INTERNAL_PERF_CLIENT_PERF_MODES_SET_CONTROL
+ *
+ * Internal physical-side handler for setting client perf modes (WPPS).
+ * The kernel-side WppsConfigSession control forwards here after capability
+ * validation.
+ */
+#define NV2080_CTRL_CMD_INTERNAL_PERF_CLIENT_PERF_MODES_SET_CONTROL (0x20800b20) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_2_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_PERF_CLIENT_PERF_MODES_SET_CONTROL_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_INTERNAL_PERF_CLIENT_PERF_MODES_SET_CONTROL_PARAMS_MESSAGE_ID (0x20U)
+
+typedef struct NV2080_CTRL_INTERNAL_PERF_CLIENT_PERF_MODES_SET_CONTROL_PARAMS {
+    NV2080_CTRL_BOARDOBJGRP_MASK_E255 activeModes;
+} NV2080_CTRL_INTERNAL_PERF_CLIENT_PERF_MODES_SET_CONTROL_PARAMS;
+
+/*!
+ * NV2080_CTRL_CMD_INTERNAL_NVLINK_INIT_ALID_AND_PTC
+ *
+ * Initialize the GPU ALID and the Nvlink PTC clock for the GPU
+ *
+ *   gpuAlid                 [in]  ALID of the GPU
+ *   bInitPtc                [in]  Whether or not to initialize the Nvlink PTC clock
+ *   primaryQueryGpuAlid     [in]  ALID of the primary query GPU
+ *   ptcInitStatus           [out] PTC initialization status
+ */
+#define NV2080_CTRL_INTERNAL_PTC_INITIALIZED_STATUS_UNINITIALIZED    0x0U
+#define NV2080_CTRL_INTERNAL_PTC_INITIALIZED_STATUS_INITIALIZED      0x1U
+
+#define NV2080_CTRL_CMD_INTERNAL_NVLINK_INIT_ALID_AND_PTC (0x20800b21) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_2_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_NVLINK_INIT_ALID_AND_PTC_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_INTERNAL_NVLINK_INIT_ALID_AND_PTC_PARAMS_MESSAGE_ID (0x21U)
+
+typedef struct NV2080_CTRL_INTERNAL_NVLINK_INIT_ALID_AND_PTC_PARAMS {
+    NvU32  gpuAlid;
+    NvBool bInitPtc;
+    NvU32  primaryQueryGpuAlid;
+    NvU32  ptcInitStatus;
+} NV2080_CTRL_INTERNAL_NVLINK_INIT_ALID_AND_PTC_PARAMS;
+
+/*!
+ * Per-GPU BIF NVLink traffic state.
+ */
+typedef struct NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE {
+    /*!
+     * Whether trafficEnabledLinks contains valid state.
+     */
+    NvBool bValid;
+    /*!
+     * Links currently enabled to carry traffic. A link may be active or
+     * trained while still being absent from this mask, for example due to RBM.
+     */
+    NV_DECLARE_ALIGNED(NV2080_CTRL_NVLINK_LINK_MASK trafficEnabledLinks, 8);
+} NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE;
+
+/*!
+ * NV2080_CTRL_CMD_INTERNAL_BIF_NVLINK_STATE_SET
+ *
+ * Updates the per-GPU NVLink traffic state.
+ *
+ *   state [IN]
+ *     NVLink state. See @ref NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE for details.
+ */
+#define NV2080_CTRL_CMD_INTERNAL_BIF_NVLINK_STATE_SET (0x20800b23) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_2_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE_SET_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE_SET_PARAMS_MESSAGE_ID (0x23U)
+
+typedef struct NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE_SET_PARAMS {
+    NV_DECLARE_ALIGNED(NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE state, 8);
+} NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE_SET_PARAMS;
+
+/*!
+ * NV2080_CTRL_CMD_INTERNAL_BIF_NVLINK_STATE_GET
+ *
+ * Retrieves the per-GPU NVLink traffic state.
+ *
+ *   state [OUT]
+ *     NVLink state. See @ref NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE for details.
+ */
+#define NV2080_CTRL_CMD_INTERNAL_BIF_NVLINK_STATE_GET (0x20800b24) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_INTERNAL_2_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE_GET_PARAMS_MESSAGE_ID" */
+
+#define NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE_GET_PARAMS_MESSAGE_ID (0x24U)
+
+typedef struct NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE_GET_PARAMS {
+    NV_DECLARE_ALIGNED(NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE state, 8);
+} NV2080_CTRL_INTERNAL_BIF_NVLINK_STATE_GET_PARAMS;
+
+/*
+ * NV2080_CTRL_CMD_INTERNAL_RC_WATCHDOG_SET_TEST_MODE
+ *
+ * Enable/Disable RM test flow for RC watchdog test
+ */
+
+
+#define NV2080_CTRL_INTERNAL_RC_WATCHDOG_SET_TEST_MODE_PARAMS_MESSAGE_ID (0x15U)
+
+typedef struct NV2080_CTRL_INTERNAL_RC_WATCHDOG_SET_TEST_MODE_PARAMS {
+    NvBool bEnable;
+} NV2080_CTRL_INTERNAL_RC_WATCHDOG_SET_TEST_MODE_PARAMS;
+
+#define NV2080_CTRL_CMD_INTERNAL_RC_WATCHDOG_SET_TEST_MODE             (0x20800b15) /* finn: Evaluated from "((FINN_NV20_SUBDEVICE_0_INTERNAL_2_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_RC_WATCHDOG_SET_TEST_MODE_PARAMS_MESSAGE_ID)" */
+
+#define NV2080_CTRL_INTERNAL_NVLINK_FLA_REMAP_TABLE_MAX_REMAP_ENTRIES  4096
+#define NV2080_CTRL_INTERNAL_NVLINK_NODE_REMAP_TABLE_MAX_REMAP_ENTRIES 64
+/*!
+ * NV2080_CTRL_INTERNAL_NVLINK_GET_REMAP_TABLE_DUMP_PARAMS
+ *
+ * linkId [in] : the link to grab remap table entries for
+ */
+#define NV2080_CTRL_INTERNAL_NVLINK_GET_REMAP_TABLE_DUMP_PARAMS_MESSAGE_ID (0xF9U)
+
+typedef struct NV2080_CTRL_INTERNAL_NVLINK_GET_REMAP_TABLE_DUMP_PARAMS {
+    NvU32 linkId;
+    NvU32 networkConfigRegs[11];
+    NvU32 vcToSlMap;
+    NvU32 flaRemapData0[NV2080_CTRL_INTERNAL_NVLINK_FLA_REMAP_TABLE_MAX_REMAP_ENTRIES];
+    NvU32 flaRemapData1[NV2080_CTRL_INTERNAL_NVLINK_FLA_REMAP_TABLE_MAX_REMAP_ENTRIES];
+    NvU32 nodeRemapData0[NV2080_CTRL_INTERNAL_NVLINK_NODE_REMAP_TABLE_MAX_REMAP_ENTRIES];
+    NvU32 nodeRemapData1[NV2080_CTRL_INTERNAL_NVLINK_NODE_REMAP_TABLE_MAX_REMAP_ENTRIES];
+} NV2080_CTRL_INTERNAL_NVLINK_GET_REMAP_TABLE_DUMP_PARAMS;
+
+#define NV2080_CTRL_CMD_INTERNAL_NVLINK_GET_REMAP_TABLE_DUMP (0x208030f9U) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_NVLINK_INTERFACE_ID << 8) | NV2080_CTRL_INTERNAL_NVLINK_GET_REMAP_TABLE_DUMP_PARAMS_MESSAGE_ID" */
 
 /* ctrl2080internal_h */

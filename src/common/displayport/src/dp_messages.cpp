@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2010-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2010-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -31,10 +31,12 @@
 #include "dp_bitstream.h"
 #include "dp_splitter.h"
 #include "dp_messages.h"
+#include "dp_messagecodings.h"
 #include "dp_merger.h"
 #include "dp_list.h"
 #include "dp_tracing.h"
 #include "dp_printf.h"
+#include "dp_regkeydatabase.h"
 
 using namespace DisplayPort;
 namespace DisplayPort
@@ -65,25 +67,45 @@ namespace DisplayPort
 //
 bool MessageManager::send(MessageManager::Message * message, NakData & nakData)
 {
+    if (isBeingDestroyed)
+        return false;
+
     GenericMessageCompletion completion;
-    Address::StringBuffer sb;
-    DP_USED(sb);
+
 
     NvU64 startTime, elapsedTime;
     message->bBusyWaiting = true;
     message->setMessagePriority(NV_DP_SBMSG_PRIORITY_LEVEL_1);
+    hal->updateDPCDOfflineRetryOnNack();
+    if (hal->isDpcdOffline())
+    {
+        DP_PRINTF(DP_WARNING, "DP-MM> Device went offline SBM request failed");
+        // setting Nak reason to Timeout, as we haven't received any reply from the device and device went offline
+        completion.nakData.reason = NakTimeout;
+        completion.failed = true;
+        nakData = completion.nakData;
+        return false;
+    }
     post(message, &completion);
     startTime = timer->getTimeUs();
+    sendDepth++;
     do
     {
-        hal->updateDPCDOffline();
+        hal->updateDPCDOfflineRetryOnNack();
         if (hal->isDpcdOffline())
         {
-            DP_PRINTF(DP_WARNING, "DP-MM> Device went offline while waiting for reply and so ignoring message %p (ID = %02X, target = %s)",
-                      message, message->requestIdentifier, ((message->state).target).toString(sb));
+            NvU64 packedAddr = ((message->state).target).pack();
+            DP_PRINTF(DP_WARNING, "DP-MM> Device went offline while waiting for reply and so ignoring message %p (ID = %02X, target = " DP_ADDR_FMT ")",
+                      message, message->requestIdentifier, DP_ADDR_ARGS(packedAddr));
+            DP_USED(packedAddr);
             completion.nakData.reason = NakDpcdFail;
             nakData = completion.nakData;
             completion.failed = true;
+            message->sink = NULL;
+            if (message->parent)
+            {
+                message->parent->awaitingReplyDownRequest.remove(message);
+            }
             break;
         }
 
@@ -94,6 +116,11 @@ bool MessageManager::send(MessageManager::Message * message, NakData & nakData)
         if (completion.completed)
         {
             nakData = completion.nakData;
+            message->sink = NULL;
+            if (message->parent)
+            {
+                message->parent->awaitingReplyDownRequest.remove(message);
+            }
             break;
         }
 
@@ -103,18 +130,31 @@ bool MessageManager::send(MessageManager::Message * message, NakData & nakData)
         {
             message->expired(NULL);
             nakData.reason = NakTimeout;
+            message->sink = NULL;
+            if (message->parent)
+            {
+                message->parent->awaitingReplyDownRequest.remove(message);
+            }
             break;
         }
 
         // Sleep while processing timer callbacks
         timer->sleep(1);
     } while(true);
+    sendDepth--;
 
+    if (sendDepth == 0)
+        processDeferredCompletions();
+
+    message->bBusyWaiting = false;
     return !completion.failed;
 }
 
 bool MessageManager::send(MessageManager::Message * message, Message::MessageEventSink * sink)
 {
+    if (isBeingDestroyed)
+        return false;
+
     GenericMessageCompletion completion;
     Address::StringBuffer sb;
     DP_USED(sb);
@@ -122,18 +162,50 @@ bool MessageManager::send(MessageManager::Message * message, Message::MessageEve
     NvU64 startTime, elapsedTime;
     message->bBusyWaiting = true;
     message->setMessagePriority(NV_DP_SBMSG_PRIORITY_LEVEL_1);
+    hal->updateDPCDOfflineRetryOnNack();
+    if (hal->isDpcdOffline())
+    {
+        DP_PRINTF(DP_WARNING, "DP-MM> Device went offline SBM request failed");
+        // setting Nak reason to Timeout, as we haven't received any reply from the device and device went offline
+        completion.nakData.reason = NakTimeout;
+        completion.failed = true;
+        if(sink)
+        {
+            sink->messageFailed(message, &completion.nakData);
+        }
+        return false;
+    }
     post(message, &completion);
     startTime = timer->getTimeUs();
+    sendDepth++;
 
     do
     {
-        hal->updateDPCDOffline();
+        hal->updateDPCDOfflineRetryOnNack();
         if (hal->isDpcdOffline())
         {
             DP_PRINTF(DP_WARNING, "DP-MM> Device went offline while waiting for reply and so ignoring message %p (ID = %02X, target = %s)",
                       message, message->requestIdentifier, ((message->state).target).toString(sb));
-            completion.nakData.reason = NakDpcdFail;
+            // setting Nak reason to Timeout, as we haven't received any reply from the device and device went offline
+            completion.nakData.reason = NakTimeout;
             completion.failed = true;
+            message->sink = NULL;
+            if (message->parent)
+            {
+                message->parent->awaitingReplyDownRequest.remove(message);
+                if (!message->parent->isBeingDestroyed)
+                {
+                    message->parent->clearPendingMsg();
+                    message->parent->transmitAwaitingDownRequests();
+                    message->parent->transmitAwaitingUpReplies();
+                }
+            }
+            // Update message here since sink might potentially destroy it.
+            message->bBusyWaiting = false;
+            if(sink)
+            {
+                sink->messageFailed(message, &completion.nakData);
+            }
             break;
         }
 
@@ -143,6 +215,13 @@ bool MessageManager::send(MessageManager::Message * message, Message::MessageEve
 
         if (completion.completed)
         {
+            // Update message here since sink might potentially destroy it.
+            message->sink = NULL;
+            if (message->parent)
+            {
+                message->parent->awaitingReplyDownRequest.remove(message);
+            }
+            message->bBusyWaiting = false;
             if(sink)
             {
                 if(completion.failed == true)
@@ -166,6 +245,13 @@ bool MessageManager::send(MessageManager::Message * message, Message::MessageEve
             // message->expired() will call GenericMessageCompletion->messageFailed() where failed is set to true.
             // Calling explicitly caller's (sink) messageFailed() callback when there's NACK or TIMEOUT errors.
             //
+            // Update message here since sink might potentially destroy it.
+            message->sink = NULL;
+            if (message->parent)
+            {
+                message->parent->awaitingReplyDownRequest.remove(message);
+            }
+            message->bBusyWaiting = false;
             if((completion.failed == true) && sink)
             {
                 sink->messageFailed(message, &completion.nakData);
@@ -176,9 +262,83 @@ bool MessageManager::send(MessageManager::Message * message, Message::MessageEve
         // Sleep while processing timer callbacks
         timer->sleep(1);
     } while(true);
+    sendDepth--;
+
+    if (sendDepth == 0)
+        processDeferredCompletions();
 
     return !completion.failed;
-   
+
+}
+
+void MessageManager::processDeferredCompletions()
+{
+    if (bDrainingDeferred)
+    {
+        DP_PRINTF(DP_WARNING, "DP-MM> Recursive drain blocked");
+        return;
+    }
+
+    //
+    // Hard invariant: this must only run from the outermost send() exit,
+    // i.e. when no busy-wait loop is active above us on the stack.
+    //
+    DP_ASSERT(sendDepth == 0);
+
+    if (deferredCompletions.isEmpty())
+        return;
+
+    DP_PRINTF(DP_INFO, "DP-MM> Draining %u deferred callbacks",
+              deferredCompletions.size());
+
+    bDrainingDeferred = true;
+    while (!deferredCompletions.isEmpty())
+    {
+        DeferredCompletion * dc =
+            (DeferredCompletion *)deferredCompletions.front();
+        deferredCompletions.remove(dc);
+
+        Message *                   msg     = dc->message;
+        Message::MessageEventSink * snk     = dc->sink;
+        bool                        bFailed = dc->failed;
+        NakData                     nak     = dc->nakData;
+        delete dc;
+
+        DP_ASSERT(snk && msg && msg->parent == this && "deferred msg unlinked before drain");
+
+        if (bFailed)
+            snk->messageFailed(msg, &nak);
+        else
+            snk->messageCompleted(msg);
+    }
+    bDrainingDeferred = false;
+}
+
+//
+// Purge deferred-completion entries for a dying Message before its pointer
+// is invalidated. Gated by the regkey: when deferred callbacks are disabled
+// the queue is never populated, so purge is a no-op.
+//
+void MessageManager::purgeDeferredForMessage(Message * m)
+{
+    if (dpRegkeyDatabase.bDisableDeferredSBMCallbacks)
+        return;
+
+    if (!m)
+        return;
+
+    for (ListElement * i = deferredCompletions.begin(); i != deferredCompletions.end(); )
+    {
+        DeferredCompletion * dc = (DeferredCompletion *)i;
+        i = i->next;                                        // advance before remove
+        if (dc->message == m)
+        {
+            DP_PRINTF(DP_INFO,
+                      "DP-MM> Purging deferred entry for dying msg=%p reqId=0x%02X", m, m->requestIdentifier);
+            deferredCompletions.remove(dc);
+            delete dc;
+        }
+    }
 }
 
 bool DisplayPort::extractGUID(BitStreamReader * reader, GUID * guid)
@@ -199,6 +359,9 @@ bool DisplayPort::extractGUID(BitStreamReader * reader, GUID * guid)
 
 void  MessageManager::messagedReceived(IncomingTransactionManager * from, EncodedMessage * message)
 {
+    if (isBeingDestroyed)
+        return;
+
     if (from == &mergerUpRequest)
     {
         onUpRequestReceived(true, message);
@@ -219,7 +382,33 @@ void MessageManager::Message::splitterFailed(OutgoingTransactionManager * from)
     MessageManager * parent = this->parent;
 
     if (sink)
-        sink->messageFailed(this, &nakData);
+    {
+        if (!dpRegkeyDatabase.bDisableDeferredSBMCallbacks &&
+            parent->sendDepth > 0 && !this->bBusyWaiting)
+        {
+            DP_PRINTF(DP_INFO,
+                      "DP-MM> Deferred messageFailed (splitter) for msg=%p reqId=0x%02X depth=%u",
+                      this, this->requestIdentifier, parent->sendDepth);
+            DeferredCompletion * dc = new DeferredCompletion();
+            if (!dc)
+            {
+                // Allocation failed; fall back to inline delivery.
+                sink->messageFailed(this, &nakData);
+            }
+            else
+            {
+                dc->message = this;
+                dc->sink    = this->sink;
+                dc->failed  = true;
+                dc->nakData = nakData;
+                parent->deferredCompletions.insertBack(dc);
+            }
+        }
+        else
+        {
+            sink->messageFailed(this, &nakData);
+        }
+    }
 
     if (from == &parent->splitterDownRequest)
     {
@@ -264,11 +453,12 @@ void MessageManager::Message::splitterTransmitted(OutgoingTransactionManager * f
 //   - Let's assume the message was not replied to
 void  MessageManager::Message::expired(const void * tag)
 {
-    Address::StringBuffer sb;
-    DP_USED(sb);
 
-    DP_PRINTF(DP_WARNING, "DP-MM> Message transmit time expired on message %p (ID = %02X, target = %s)",
-          (Message*)this, ((Message*)this)->requestIdentifier, (((Message*)this)->state.target).toString(sb));
+
+    NvU64 packedAddr = (((Message*)this)->state.target).pack();
+    DP_PRINTF(DP_WARNING, "DP-MM> Message transmit time expired on message %p (ID = %02X, target = " DP_ADDR_FMT ")",
+          (Message*)this, ((Message*)this)->requestIdentifier, DP_ADDR_ARGS(packedAddr));
+    DP_USED(packedAddr);
 
     Address::NvU32Buffer addrBuffer;
     dpMemZero(addrBuffer, sizeof(addrBuffer));
@@ -291,7 +481,33 @@ void  MessageManager::Message::expired(const void * tag)
     }
 
     if (sink)
-        sink->messageFailed(this, &nakData);
+    {
+        if (!dpRegkeyDatabase.bDisableDeferredSBMCallbacks &&
+            parent && parent->sendDepth > 0 && !this->bBusyWaiting)
+        {
+            DP_PRINTF(DP_INFO,
+                      "DP-MM> Deferred messageFailed (timeout) for msg=%p reqId=0x%02X depth=%u",
+                      this, this->requestIdentifier, parent->sendDepth);
+            DeferredCompletion * dc = new DeferredCompletion();
+            if (!dc)
+            {
+                // Allocation failed; fall back to inline delivery.
+                sink->messageFailed(this, &nakData);
+            }
+            else
+            {
+                dc->message = this;
+                dc->sink    = this->sink;
+                dc->failed  = true;
+                dc->nakData = nakData;
+                parent->deferredCompletions.insertBack(dc);
+            }
+        }
+        else
+        {
+            sink->messageFailed(this, &nakData);
+        }
+    }
 }
 
 //
@@ -299,6 +515,9 @@ void  MessageManager::Message::expired(const void * tag)
 //
 void MessageManager::transmitAwaitingDownRequests()
 {
+    if (isBeingDestroyed)
+        return;
+
     for (ListElement * i = notYetSentDownRequest.begin(); i!=notYetSentDownRequest.end(); )
     {
         Message * m = (Message *)i;
@@ -331,6 +550,9 @@ void MessageManager::transmitAwaitingDownRequests()
 //
 void MessageManager::transmitAwaitingUpReplies()
 {
+    if (isBeingDestroyed)
+        return;
+
     for (ListElement * i = notYetSentUpReply.begin(); i!=notYetSentUpReply.end(); )
     {
         Message * m = (Message *)i;
@@ -348,18 +570,27 @@ void MessageManager::transmitAwaitingUpReplies()
 
 void MessageManager::postReply(Message * message, Message::MessageEventSink * sink)
 {
+    if (isBeingDestroyed)
+        return;
+
     post(message, sink, true);
 }
 
 void MessageManager::cancelAllByType(unsigned type)
 {
+    if (isBeingDestroyed)
+        return;
+
     for (ListElement * i = notYetSentDownRequest.begin(); i!=notYetSentDownRequest.end(); )
     {
         Message * m = (Message *)i;
         i = i->next;
 
         if (m->requestIdentifier == type)
+        {
+            purgeDeferredForMessage(m);
             notYetSentDownRequest.remove(m);
+        }
     }
 
     for (ListElement * i = awaitingReplyDownRequest.begin(); i!=awaitingReplyDownRequest.end(); )
@@ -368,12 +599,20 @@ void MessageManager::cancelAllByType(unsigned type)
         i = i->next;
 
         if (m->requestIdentifier == type)
+        {
+            purgeDeferredForMessage(m);
             awaitingReplyDownRequest.remove(m);
+        }
     }
 }
 
 void MessageManager::cancelAll(Message * message)
 {
+    if (isBeingDestroyed)
+        return;
+
+    purgeDeferredForMessage(message);
+
     for (ListElement * i = notYetSentDownRequest.begin(); i!=notYetSentDownRequest.end(); )
     {
         Message * m = (Message *)i;
@@ -393,9 +632,17 @@ void MessageManager::cancelAll(Message * message)
     }
 }
 
+void MessageManager::clearSink(Message * message)
+{
+    if (message)
+        message->sink = 0;
+}
+
 void MessageManager::post(Message * message, Message::MessageEventSink * sink, bool transmitReply)
 {
     DP_ASSERT(!isBeingDestroyed && "You may not post messages in response to a shutdown");
+    if (isBeingDestroyed)
+        return;
 
     if (isPaused)
         return;
@@ -459,6 +706,9 @@ void MessageManager::post(Message * message, Message::MessageEventSink * sink, b
 
 void MessageManager::onUpRequestReceived(bool status, EncodedMessage * message)
 {
+    if (isBeingDestroyed)
+        return;
+
     if (!status)
     {
         return;
@@ -477,12 +727,49 @@ void MessageManager::onUpRequestReceived(bool status, EncodedMessage * message)
         }
     }
 
-    DP_ASSERT(0 && "Warning: Unknown upstream UP_REQ message");
+    // No receiver handled this up request; NAK it per DP spec.
+    DP_PRINTF(DP_WARNING, "DP-MM> Unknown upstream request, replying with NAK up reply");
+    sendNakForUnknownUpRequest(message);
+}
+
+void MessageManager::sendNakForUnknownUpRequest(EncodedMessage * message)
+{
+    BitStreamReader reader(&message->buffer, 0, message->buffer.length * 8);
+
+    reader.readOrDefault(1, 0);
+    unsigned reqId = reader.readOrDefault(7, 0);
+
+    if (nakUpReply)
+    {
+        nakUpReply->clear();
+        delete nakUpReply;
+    }
+
+    // 19-byte NAK reply: zero GUID (source has no sideband GUID) +
+    // NakBadParam ("invalid request syntax") + 0 data.
+    nakUpReply = new GenericUpReplyMessage(message->address, reqId,
+                                           true         /* bReplyIsNack */,
+                                           true         /* bBroadcast */,
+                                           false        /* bPath */,
+                                           NULL         /* nakGuid = zero GUID */,
+                                           NakBadParam  /* NAK_Reason */,
+                                           0            /* NAK_Data */);
+    if (!nakUpReply)
+    {
+        // Allocation failed; drop the NAK rather than deref a NULL Message in post().
+        DP_PRINTF(DP_ERROR, "DP-MM> Failed to allocate NAK up reply; dropping unknown up-request");
+        return;
+    }
+
+    postReply(nakUpReply, &nakUpReplyEvtSink);
 }
 
 
 void MessageManager::onDownReplyReceived(bool status, EncodedMessage * message)
 {
+    if (isBeingDestroyed)
+        return;
+
     if (!status)
     {
         return;
@@ -532,12 +819,14 @@ MessageManager::~MessageManager()
     NakData nakUndef;
     nakUndef.reason = NakUndefined;
 
-    for (ListElement * i = notYetSentDownRequest.begin(); i!=notYetSentDownRequest.end(); )
+    while (!notYetSentDownRequest.isEmpty())
     {
-        ListElement * next = i->next;
-        if (((Message *)i)->sink)
-            ((Message *)i)->sink->messageFailed(((Message *)i), &nakUndef);
-        i = next;
+        Message * m = (Message *)notYetSentDownRequest.front();
+        notYetSentDownRequest.remove(m);
+        purgeDeferredForMessage(m);
+        m->parent = 0;
+        if (m->sink)
+            m->sink->messageFailed(m, &nakUndef);
     }
     if (!notYetSentDownRequest.isEmpty())
     {
@@ -550,12 +839,14 @@ MessageManager::~MessageManager()
         }
     }
 
-    for (ListElement * i = notYetSentUpReply.begin(); i!=notYetSentUpReply.end();)
+    while (!notYetSentUpReply.isEmpty())
     {
-        ListElement * next = i->next;
-        if (((Message *)i)->sink)
-            ((Message *)i)->sink->messageFailed(((Message *)i), &nakUndef);
-        i = next;
+        Message * m = (Message *)notYetSentUpReply.front();
+        notYetSentUpReply.remove(m);
+        purgeDeferredForMessage(m);
+        m->parent = 0;
+        if (m->sink)
+            m->sink->messageFailed(m, &nakUndef);
     }
     if (!notYetSentUpReply.isEmpty())
     {
@@ -568,12 +859,14 @@ MessageManager::~MessageManager()
         }
     }
 
-    for (ListElement * i = awaitingReplyDownRequest.begin(); i!=awaitingReplyDownRequest.end(); )
+    while (!awaitingReplyDownRequest.isEmpty())
     {
-        ListElement * next = i->next;
-        if (((Message *)i)->sink)
-            ((Message *)i)->sink->messageFailed(((Message *)i), &nakUndef);
-        i = next;
+        Message * m = (Message *)awaitingReplyDownRequest.front();
+        awaitingReplyDownRequest.remove(m);
+        purgeDeferredForMessage(m);
+        m->parent = 0;
+        if (m->sink)
+            m->sink->messageFailed(m, &nakUndef);
     }
     if (!awaitingReplyDownRequest.isEmpty())
     {
@@ -586,9 +879,28 @@ MessageManager::~MessageManager()
         }
     }
 
+    if (!deferredCompletions.isEmpty())
+    {
+        DP_PRINTF(DP_WARNING, "DP-MM> Destroying with %u deferred entries",
+                  deferredCompletions.size());
+    }
+    while (!deferredCompletions.isEmpty())
+    {
+        ListElement * e = deferredCompletions.front();
+        deferredCompletions.remove(e);
+        delete (DeferredCompletion *)e;
+    }
+
     // Do not reclaim the memory of our registered receivers
     while (!messageReceivers.isEmpty())
         messageReceivers.remove(messageReceivers.front());
+
+    if (nakUpReply)
+    {
+        nakUpReply->clear();
+        delete nakUpReply;
+        nakUpReply = NULL;
+    }
 }
 
 ParseResponseStatus MessageManager::Message::parseResponse(EncodedMessage * message)
@@ -626,7 +938,33 @@ ParseResponseStatus MessageManager::Message::parseResponse(EncodedMessage * mess
         MessageManager * parent = this->parent;
 
         if (sink)
-            sink->messageFailed(this, &nakData);
+        {
+            if (!dpRegkeyDatabase.bDisableDeferredSBMCallbacks &&
+                parent->sendDepth > 0 && !this->bBusyWaiting)
+            {
+                DP_PRINTF(DP_INFO,
+                          "DP-MM> Deferred messageFailed (NAK reason=%u) for msg=%p reqId=0x%02X depth=%u",
+                          nakData.reason, this, this->requestIdentifier, parent->sendDepth);
+                DeferredCompletion * dc = new DeferredCompletion();
+                if (!dc)
+                {
+                    // Allocation failed; fall back to inline delivery.
+                    sink->messageFailed(this, &nakData);
+                }
+                else
+                {
+                    dc->message = this;
+                    dc->sink    = this->sink;
+                    dc->failed  = true;
+                    dc->nakData = nakData;
+                    parent->deferredCompletions.insertBack(dc);
+                }
+            }
+            else
+            {
+                sink->messageFailed(this, &nakData);
+            }
+        }
 
         parent->transmitAwaitingDownRequests();
 
@@ -641,8 +979,32 @@ ParseResponseStatus MessageManager::Message::parseResponse(EncodedMessage * mess
 
         if (this->sink)
         {
-            MessageEventSink * msgSink = this->sink;
-            msgSink->messageCompleted(this);
+            if (!dpRegkeyDatabase.bDisableDeferredSBMCallbacks &&
+                parent->sendDepth > 0 && !this->bBusyWaiting)
+            {
+                DP_PRINTF(DP_INFO,
+                          "DP-MM> Deferred messageCompleted for msg=%p reqId=0x%02X depth=%u",
+                          this, this->requestIdentifier, parent->sendDepth);
+                DeferredCompletion * dc = new DeferredCompletion();
+                if (!dc)
+                {
+                    // Allocation failed; fall back to inline delivery.
+                    MessageEventSink * msgSink = this->sink;
+                    msgSink->messageCompleted(this);
+                }
+                else
+                {
+                    dc->message = this;
+                    dc->sink    = this->sink;
+                    dc->failed  = false;
+                    parent->deferredCompletions.insertBack(dc);
+                }
+            }
+            else
+            {
+                MessageEventSink * msgSink = this->sink;
+                msgSink->messageCompleted(this);
+            }
         }
     }
 

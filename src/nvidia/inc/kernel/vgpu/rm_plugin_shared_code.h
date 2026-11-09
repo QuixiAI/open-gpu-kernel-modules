@@ -1663,29 +1663,6 @@ return_t deserialize_NV2080_CTRL_GPU_MIGRATABLE_OPS_PARAMS_v21_07(NV2080_CTRL_GP
 
 #ifdef BUILD_COMMON_RPCS
 static
-return_t deserialize_NV0080_CTRL_FIFO_SET_CHANNEL_PROPERTIES_PARAMS_v03_00(NV0080_CTRL_FIFO_SET_CHANNEL_PROPERTIES_PARAMS *pParams,
-                                                                           NvU8 *buffer,
-                                                                           NvU32 bufferSize,
-                                                                           NvU32 *offset)
-{
-    NV0080_CTRL_FIFO_SET_CHANNEL_PROPERTIES_PARAMS_v03_00 *src  = (void*)(buffer);
-    NV0080_CTRL_FIFO_SET_CHANNEL_PROPERTIES_PARAMS        *dest = pParams;
-
-    if (src && dest)
-    {
-        dest->hChannel = src->hChannel;
-        dest->property = src->property;
-        dest->value    = src->value;
-    }
-    else
-        return FAILURE_T;
-
-    return SUCCESS_T;
-}
-#endif
-
-#ifdef BUILD_COMMON_RPCS
-static
 return_t deserialize_NV2080_CTRL_GPU_EVICT_CTX_PARAMS_v1A_1C(
                                                           NV2080_CTRL_GPU_EVICT_CTX_PARAMS *pParams,
                                                           NvU8 *buffer,
@@ -2574,6 +2551,58 @@ return_t deserialize_NV2080_CTRL_FIFO_SETUP_VF_ZOMBIE_SUBCTX_PDB_PARAMS_v1A_23(
     return SUCCESS_T;
 }
 
+static
+return_t deserialize_NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_PARAMS_v2F_02(
+                                                                    NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_PARAMS *pParams,
+                                                                    NvU8 *buffer,
+                                                                    NvU32 bufferSize,
+                                                                    NvU32 *offset)
+{
+#ifdef COPY_INPUT_PARAMETERS
+    NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_PARAMS_v2F_02 *src  = (void*)(buffer);
+    NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_PARAMS        *dest = pParams;
+
+    if (src && dest)
+    {
+        dest->engineType      = src->engineType;
+        dest->vChId           = src->vChId;
+        dest->channelLevel    = src->channelLevel;
+        dest->operation       = src->operation;
+    }
+    else
+        return FAILURE_T;
+
+#endif
+    return SUCCESS_T;
+}
+
+static
+return_t deserialize_NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT_PARAMS_v2F_02(
+                                                                    NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT_PARAMS *pParams,
+                                                                    NvU8 *buffer,
+                                                                    NvU32 bufferSize,
+                                                                    NvU32 *offset)
+{
+#ifdef COPY_INPUT_PARAMETERS
+    NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT_PARAMS_v2F_02 *src  = (void*)(buffer);
+    NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT_PARAMS        *dest = pParams;
+
+    if (src && dest)
+    {
+        dest->engineType                      = src->engineType;
+        dest->submitRunlistOffset              = src->submitRunlistOffset;
+        dest->bUpdateRunlist                   = src->bUpdateRunlist;
+        dest->bSkipSubmitRunlist               = src->bSkipSubmitRunlist;
+        dest->bSubmitLastUpdatedRunlist        = src->bSubmitLastUpdatedRunlist;
+        dest->numRunlistEntries                = src->numRunlistEntries;
+    }
+    else
+        return FAILURE_T;
+
+#endif
+    return SUCCESS_T;
+}
+
 return_t deserialize_NV83DE_CTRL_DEBUG_SET_SINGLE_SM_SINGLE_STEP_PARAMS_v1C_02(NV83DE_CTRL_DEBUG_SET_SINGLE_SM_SINGLE_STEP_PARAMS *pParams,
                                                                                NvU8 *buffer,
                                                                                NvU32 bufferSize,
@@ -2738,6 +2767,52 @@ return_t deserialize_NV2080_CTRL_PERF_GET_LEVEL_INFO_V2_PARAMS_v2B_0D(
                                                                     NvU32 *offset)
 {
     NV2080_CTRL_PERF_GET_LEVEL_INFO_V2_PARAMS_v2B_0D *src = (void*)(buffer);
+    NV2080_CTRL_PERF_GET_LEVEL_INFO_V2_PARAMS     *dest = pParams;
+    NvU32 i;
+    if (src && dest)
+    {
+        if (src->perfGetClkInfoListSize >
+            NV2080_CTRL_PERF_CLK_MAX_DOMAINS_v2B_0D)
+        {
+            return FAILURE_T;
+        }
+
+#ifdef COPY_INPUT_PARAMETERS
+        dest->level = src->level;
+        dest->perfGetClkInfoListSize = src->perfGetClkInfoListSize;
+#endif
+
+#ifdef COPY_OUTPUT_PARAMETERS
+        dest->flags = src->flags;
+#endif
+        for (i = 0; i < src->perfGetClkInfoListSize ; i++)
+        {
+#ifdef COPY_INPUT_PARAMETERS
+            dest->perfGetClkInfoList[i].domain      = src->perfGetClkInfoList[i].domain;
+            dest->perfGetClkInfoList[i].flags       = src->perfGetClkInfoList[i].flags;
+#endif
+
+#ifdef COPY_OUTPUT_PARAMETERS
+            dest->perfGetClkInfoList[i].currentFreq = src->perfGetClkInfoList[i].currentFreq;
+            dest->perfGetClkInfoList[i].defaultFreq = src->perfGetClkInfoList[i].defaultFreq;
+            dest->perfGetClkInfoList[i].minFreq     = src->perfGetClkInfoList[i].minFreq;
+            dest->perfGetClkInfoList[i].maxFreq     = src->perfGetClkInfoList[i].maxFreq;
+#endif
+        }
+    }
+    else
+        return FAILURE_T;
+
+    return SUCCESS_T;
+}
+
+return_t deserialize_NV2080_CTRL_PERF_GET_LEVEL_INFO_V2_PARAMS_v30_06(
+                                                                    NV2080_CTRL_PERF_GET_LEVEL_INFO_V2_PARAMS *pParams,
+                                                                    NvU8 *buffer,
+                                                                    NvU32 bufferSize,
+                                                                    NvU32 *offset)
+{
+    NV2080_CTRL_PERF_GET_LEVEL_INFO_V2_PARAMS_v30_06 *src = (void*)(buffer);
     NV2080_CTRL_PERF_GET_LEVEL_INFO_V2_PARAMS     *dest = pParams;
     NvU32 i;
     if (src && dest)
@@ -3479,6 +3554,37 @@ return_t deserialize_NV2080_CTRL_GPU_GET_INFO_V2_PARAMS_v2E_0C(NV2080_CTRL_GPU_G
 #endif
 
         for (i = 0; i < NV2080_CTRL_GPU_INFO_MAX_LIST_SIZE_v2E_0C; i++) {
+#ifdef COPY_INPUT_PARAMETERS
+             dest->gpuInfoList[i].index = src->gpuInfoList[i].index;
+#endif
+             dest->gpuInfoList[i].data  = src->gpuInfoList[i].data;
+        }
+    }
+    else
+        return FAILURE_T;
+    return SUCCESS_T;
+}
+
+return_t deserialize_NV2080_CTRL_GPU_GET_INFO_V2_PARAMS_v30_0C(NV2080_CTRL_GPU_GET_INFO_V2_PARAMS *pParams,
+                                                               NvU8 *buffer,
+                                                               NvU32 bufferSize,
+                                                               NvU32 *offset)
+{
+    NV2080_CTRL_GPU_GET_INFO_V2_PARAMS_v30_0C *src  = (void*)(buffer);
+    NV2080_CTRL_GPU_GET_INFO_V2_PARAMS        *dest = pParams;
+
+    if (src && dest)
+    {
+        NvU32 i;
+        if (src->gpuInfoListSize > NV2080_CTRL_GPU_INFO_MAX_LIST_SIZE_v30_0C) {
+            return FAILURE_T;
+        }
+
+#ifdef COPY_INPUT_PARAMETERS
+        dest->gpuInfoListSize = src->gpuInfoListSize;
+#endif
+
+        for (i = 0; i < NV2080_CTRL_GPU_INFO_MAX_LIST_SIZE_v30_0C; i++) {
 #ifdef COPY_INPUT_PARAMETERS
              dest->gpuInfoList[i].index = src->gpuInfoList[i].index;
 #endif
@@ -5279,29 +5385,6 @@ return_t serialize_NV2080_CTRL_GPU_MIGRATABLE_OPS_PARAMS_v21_07(NV2080_CTRL_GPU_
 
 #ifdef BUILD_COMMON_RPCS
 static
-return_t serialize_NV0080_CTRL_FIFO_SET_CHANNEL_PROPERTIES_PARAMS_v03_00(NV0080_CTRL_FIFO_SET_CHANNEL_PROPERTIES_PARAMS *pParams,
-                                                                         NvU8 *buffer,
-                                                                         NvU32 bufferSize,
-                                                                         NvU32 *offset)
-{
-    NV0080_CTRL_FIFO_SET_CHANNEL_PROPERTIES_PARAMS        *src  = pParams;
-    NV0080_CTRL_FIFO_SET_CHANNEL_PROPERTIES_PARAMS_v03_00 *dest = (void*)(buffer);
-
-    if (src && dest)
-    {
-        dest->hChannel = src->hChannel;
-        dest->property = src->property;
-        dest->value    = src->value;
-    }
-    else
-        return FAILURE_T;
-
-    return SUCCESS_T;
-}
-#endif
-
-#ifdef BUILD_COMMON_RPCS
-static
 return_t serialize_NV2080_CTRL_GPU_EVICT_CTX_PARAMS_v1A_1C(
                                                           NV2080_CTRL_GPU_EVICT_CTX_PARAMS *pParams,
                                                           NvU8 *buffer,
@@ -6189,6 +6272,58 @@ return_t serialize_NV2080_CTRL_FIFO_SETUP_VF_ZOMBIE_SUBCTX_PDB_PARAMS_v1A_23(
     return SUCCESS_T;
 }
 
+static
+return_t serialize_NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_PARAMS_v2F_02(
+                                                                    NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_PARAMS *pParams,
+                                                                    NvU8 *buffer,
+                                                                    NvU32 bufferSize,
+                                                                    NvU32 *offset)
+{
+#ifdef COPY_INPUT_PARAMETERS
+    NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_PARAMS_v2F_02 *dest = (void*)(buffer);
+    NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_PARAMS        *src  = pParams;
+
+    if (src && dest)
+    {
+        dest->engineType      = src->engineType;
+        dest->vChId           = src->vChId;
+        dest->channelLevel    = src->channelLevel;
+        dest->operation       = src->operation;
+    }
+    else
+        return FAILURE_T;
+
+#endif
+    return SUCCESS_T;
+}
+
+static
+return_t serialize_NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT_PARAMS_v2F_02(
+                                                                    NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT_PARAMS *pParams,
+                                                                    NvU8 *buffer,
+                                                                    NvU32 bufferSize,
+                                                                    NvU32 *offset)
+{
+#ifdef COPY_INPUT_PARAMETERS
+    NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT_PARAMS_v2F_02 *dest  = (void*)(buffer);
+    NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT_PARAMS        *src = pParams;
+
+    if (src && dest)
+    {
+        dest->engineType                      = src->engineType;
+        dest->submitRunlistOffset              = src->submitRunlistOffset;
+        dest->bUpdateRunlist                   = src->bUpdateRunlist;
+        dest->bSkipSubmitRunlist               = src->bSkipSubmitRunlist;
+        dest->bSubmitLastUpdatedRunlist        = src->bSubmitLastUpdatedRunlist;
+        dest->numRunlistEntries                = src->numRunlistEntries;
+    }
+    else
+        return FAILURE_T;
+
+#endif
+    return SUCCESS_T;
+}
+
 return_t serialize_NV83DE_CTRL_DEBUG_SET_SINGLE_SM_SINGLE_STEP_PARAMS_v1C_02(NV83DE_CTRL_DEBUG_SET_SINGLE_SM_SINGLE_STEP_PARAMS *pParams,
                                                                              NvU8 *buffer,
                                                                              NvU32 bufferSize,
@@ -6738,6 +6873,52 @@ return_t serialize_NV2080_CTRL_PERF_GET_LEVEL_INFO_V2_PARAMS_v2B_0D(
 
     return SUCCESS_T;
 }
+
+return_t serialize_NV2080_CTRL_PERF_GET_LEVEL_INFO_V2_PARAMS_v30_06(
+                                                                    NV2080_CTRL_PERF_GET_LEVEL_INFO_V2_PARAMS *pParams,
+                                                                    NvU8 *buffer,
+                                                                    NvU32 bufferSize,
+                                                                    NvU32 *offset)
+{
+    NV2080_CTRL_PERF_GET_LEVEL_INFO_V2_PARAMS_v30_06 *dest = (void*)(buffer);
+    NV2080_CTRL_PERF_GET_LEVEL_INFO_V2_PARAMS     *src = pParams;
+    NvU32 i;
+    if (src && dest)
+    {
+        if (src->perfGetClkInfoListSize >
+            NV2080_CTRL_PERF_CLK_MAX_DOMAINS_v2B_0D)
+        {
+            return FAILURE_T;
+        }
+
+#ifdef COPY_INPUT_PARAMETERS
+        dest->level = src->level;
+        dest->perfGetClkInfoListSize = src->perfGetClkInfoListSize;
+#endif
+
+#ifdef COPY_OUTPUT_PARAMETERS
+        dest->flags = src->flags;
+#endif
+        for (i = 0; i < src->perfGetClkInfoListSize ; i++)
+        {
+#ifdef COPY_INPUT_PARAMETERS
+            dest->perfGetClkInfoList[i].domain      = src->perfGetClkInfoList[i].domain;
+            dest->perfGetClkInfoList[i].flags       = src->perfGetClkInfoList[i].flags;
+#endif
+
+#ifdef COPY_OUTPUT_PARAMETERS
+            dest->perfGetClkInfoList[i].currentFreq = src->perfGetClkInfoList[i].currentFreq;
+            dest->perfGetClkInfoList[i].defaultFreq = src->perfGetClkInfoList[i].defaultFreq;
+            dest->perfGetClkInfoList[i].minFreq     = src->perfGetClkInfoList[i].minFreq;
+            dest->perfGetClkInfoList[i].maxFreq     = src->perfGetClkInfoList[i].maxFreq;
+#endif
+        }
+    }
+    else
+        return FAILURE_T;
+
+    return SUCCESS_T;
+}
 #endif
 
 #ifdef BUILD_COMMON_RPCS
@@ -7096,6 +7277,37 @@ return_t serialize_NV2080_CTRL_GPU_GET_INFO_V2_PARAMS_v2E_0C(NV2080_CTRL_GPU_GET
 #endif
 
         for (i = 0; i < NV2080_CTRL_GPU_INFO_MAX_LIST_SIZE_v2E_0C; i++) {
+#ifdef COPY_INPUT_PARAMETERS
+             dest->gpuInfoList[i].index = src->gpuInfoList[i].index;
+#endif
+             dest->gpuInfoList[i].data  = src->gpuInfoList[i].data;
+        }
+    }
+    else
+        return FAILURE_T;
+    return SUCCESS_T;
+}
+
+return_t serialize_NV2080_CTRL_GPU_GET_INFO_V2_PARAMS_v30_0C(NV2080_CTRL_GPU_GET_INFO_V2_PARAMS *pParams,
+                                                             NvU8 *buffer,
+                                                             NvU32 bufferSize,
+                                                             NvU32 *offset)
+{
+    NV2080_CTRL_GPU_GET_INFO_V2_PARAMS_v30_0C *dest = (void*)(buffer);
+    NV2080_CTRL_GPU_GET_INFO_V2_PARAMS        *src  = pParams;
+
+    if (src && dest)
+    {
+        NvU32 i;
+        if (src->gpuInfoListSize > NV2080_CTRL_GPU_INFO_MAX_LIST_SIZE_v30_0C) {
+            return FAILURE_T;
+        }
+
+#ifdef COPY_INPUT_PARAMETERS
+        dest->gpuInfoListSize = src->gpuInfoListSize;
+#endif
+
+        for (i = 0; i < NV2080_CTRL_GPU_INFO_MAX_LIST_SIZE_v30_0C; i++) {
 #ifdef COPY_INPUT_PARAMETERS
              dest->gpuInfoList[i].index = src->gpuInfoList[i].index;
 #endif

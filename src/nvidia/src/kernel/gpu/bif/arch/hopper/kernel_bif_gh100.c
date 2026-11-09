@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -33,16 +33,15 @@
 #include "ctrl/ctrl2080/ctrl2080bus.h"
 #include "kernel/gpu/nvlink/kernel_nvlink.h"
 #include "gpu_mgr/gpu_mgr.h"
-#include "kernel/gpu/mc/kernel_mc.h"
 
 #include "published/hopper/gh100/dev_xtl_ep_pri.h"
 
 #include "published/hopper/gh100/dev_xtl_ep_pcfg_gpu.h"
+#include "published/hopper/gh100/dev_xtl_ep_pcfg_vf.h"
 
 #include "published/hopper/gh100/hwproject.h"
 #include "published/hopper/gh100/dev_nv_xpl.h"
 #include "published/hopper/gh100/dev_vm.h"
-#include "published/hopper/gh100/dev_pmc.h"
 
 #include "os/os.h"
 
@@ -696,6 +695,47 @@ kbifEnablePcieAtomics_GH100
  *          NV_ERR_GENERIC
  */
 NV_STATUS
+kbifGetBusOptionsAddr_GH100_VF
+(
+    OBJGPU     *pGpu,
+    KernelBif  *pKernelBif,
+    BUS_OPTIONS options,
+    NvU32      *pAddrReg
+)
+{
+    NV_STATUS status = NV_OK;
+    NvU32     capHeader;
+
+    status = GPU_BUS_CFG_RD32(pGpu, NV_EP_PCFG_VF_PCI_EXPRESS_CAPABILITY_HEADER,
+                              &capHeader);
+    if (status != NV_OK)
+    {
+        return status;
+    }
+
+    if (DRF_VAL(_EP_PCFG_VF, _PCI_EXPRESS_CAPABILITY_HEADER, _CAP_ID,
+                capHeader) !=
+        NV_EP_PCFG_VF_PCI_EXPRESS_CAPABILITY_HEADER_CAP_ID_DEFAULT)
+    {
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    switch (options)
+    {
+        case BUS_OPTIONS_LINK_CAPABILITIES:
+            *pAddrReg = NV_EP_PCFG_VF_LINK_CAPABILITIES;
+            break;
+        default:
+            NV_PRINTF(LEVEL_ERROR, "Invalid register type passed 0x%x\n",
+                      options);
+            status = NV_ERR_GENERIC;
+            break;
+    }
+
+    return status;
+}
+
+NV_STATUS
 kbifGetBusOptionsAddr_GH100
 (
     OBJGPU     *pGpu,
@@ -908,8 +948,8 @@ kbifConfigAccessWait_GH100
                 break;
             }
         }
-        status = gpuCheckTimeout(pGpu, pTimeout);
 
+        status = gpuCheckTimeout(pGpu, pTimeout);
         if (status == NV_ERR_TIMEOUT)
         {
             NV_ASSERT_FAILED("Timed out waiting for devinit to complete\n");
@@ -958,6 +998,7 @@ kbifDoFunctionLevelReset_GH100
         status = osDoFunctionLevelReset(pGpu);
         if (status != NV_OK)
         {
+            kbifCheckResetStatus_HAL(pGpu, pKernelBif);
             NV_ASSERT_FAILED("osDoFunctionLevelReset failed!\n");
         }
         goto kbifDoFunctionLevelReset_GH100_exit;
@@ -983,7 +1024,6 @@ kbifDoFunctionLevelReset_GH100
 
     // Trigger FLR now
     status = kbifTriggerFlr_HAL(pGpu, pKernelBif);
-
     if (status != NV_OK)
     {
         goto kbifDoFunctionLevelReset_GH100_exit;
@@ -1031,9 +1071,9 @@ kbifDoFunctionLevelReset_GH100
     gpuSetTimeout(pGpu, flrDevInitTimeout, &timeout, GPU_TIMEOUT_FLAGS_OSTIMER);
 
     status = kbifConfigAccessWait_HAL(pGpu, pKernelBif, &timeout);
-
     if (status != NV_OK)
     {
+        kbifCheckResetStatus_HAL(pGpu, pKernelBif);
         NV_ASSERT_FAILED("Timed out waiting for devinit to complete\n");
         goto kbifDoFunctionLevelReset_GH100_exit;
     }
@@ -1069,6 +1109,7 @@ kbifDoFunctionLevelReset_GH100
 
         if (status != NV_OK)
         {
+            kbifCheckResetStatus_HAL(pGpu, pKernelBif);
             DBG_BREAKPOINT();
             NV_PRINTF(LEVEL_ERROR, "VBIOS boot failed!!\n");
             goto kbifDoFunctionLevelReset_GH100_exit;
@@ -1486,14 +1527,14 @@ kbifRestorePcieConfigRegisters_GH100
             // Check if GPU is actually accessible before continue
             osGetPerformanceCounter(&timeStampStart);
             gpuSetTimeout(pGpu, GPU_TIMEOUT_DEFAULT, &timeout, 0);
-            NvU32 pmcBoot0 = kmcReadPmcBoot0_HAL(pGpu, GPU_GET_KERNEL_MC(pGpu));
+            NvU32 pmcBoot0 = GPU_REG_RD32(pGpu, gpuGetPmcBoot0Addr_HAL(pGpu));
 
             while (pmcBoot0 != pGpu->chipId0)
             {
                 NV_PRINTF(LEVEL_INFO,
                           "GPU not back on the bus after %s, 0x%x != 0x%x!\n",
                           pKernelBif->bInFunctionLevelReset?"FLR":"GC6 exit", pmcBoot0, pGpu->chipId0);
-                pmcBoot0 = kmcReadPmcBoot0_HAL(pGpu, GPU_GET_KERNEL_MC(pGpu));
+                pmcBoot0 = GPU_REG_RD32(pGpu, gpuGetPmcBoot0Addr_HAL(pGpu));
                 NV_ASSERT(0);
                 status = gpuCheckTimeout(pGpu, &timeout);
                 if (status == NV_ERR_TIMEOUT)
@@ -1648,7 +1689,7 @@ kbifRestoreBarsAndCommand_GH100
     GPU_BUS_CFG_CYCLE_WR32(pGpu, NV_EP_PCFG_GPU_CTRL_CMD_AND_STATUS,
                            pKernelBif->cacheData.gpuBootConfigSpace[NV_EP_PCFG_GPU_CTRL_CMD_AND_STATUS/sizeof(NvU32)]);
 
-    if (kmcReadPmcBoot0_HAL(pGpu, GPU_GET_KERNEL_MC(pGpu)) != pGpu->chipId0)
+    if (GPU_REG_RD32(pGpu, gpuGetPmcBoot0Addr_HAL(pGpu)) != pGpu->chipId0)
     {
         return NV_ERR_INVALID_READ;
     }

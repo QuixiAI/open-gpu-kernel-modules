@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2004-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2004-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -125,6 +125,9 @@
 #endif
 #if GPU_CHILD_MODULE(KERNEL_SEC2)
     GPU_CHILD_SINGLE_INST( KernelSec2,           GPU_GET_KERNEL_SEC2,                 1,                NV_FALSE,        pKernelSec2      )
+#endif
+#if GPU_CHILD_MODULE(KERNEL_VBIOS)
+    GPU_CHILD_SINGLE_INST( KernelVbios,          GPU_GET_KERNEL_VBIOS,                1,                NV_FALSE,        pKernelVbios     )
 #endif
 #if GPU_CHILD_MODULE(KERNEL_GSP)
     GPU_CHILD_SINGLE_INST( KernelGsp,            GPU_GET_KERNEL_GSP,                  1,                NV_FALSE,        pKernelGsp       )
@@ -303,6 +306,9 @@
 #if RMCFG_MODULE_SPDM && GPU_CHILD_MODULE(SPDM)
     GPU_CHILD_SINGLE_INST( Spdm,                 GPU_GET_SPDM,                        1,                NV_TRUE,         pSpdm            )
 #endif
+#if RMCFG_MODULE_TDISP_MGR && GPU_CHILD_MODULE(TDISP_MGR)
+    GPU_CHILD_SINGLE_INST( TdispMgr,             GPU_GET_TDISP_MGR,                   1,                NV_TRUE,         pTdispMgr        )
+#endif
 #if RMCFG_MODULE_CONF_COMPUTE && GPU_CHILD_MODULE(CONF_COMPUTE)
     GPU_CHILD_SINGLE_INST( ConfidentialCompute,  GPU_GET_CONF_COMPUTE,                1,                NV_TRUE,         pConfCompute     )
 #endif
@@ -320,6 +326,9 @@
 #endif
 #if RMCFG_MODULE_KERNEL_HFRP && GPU_CHILD_MODULE(KERNEL_HFRP)
     GPU_CHILD_SINGLE_INST( KernelHFRP,              GPU_GET_KERNEL_HFRP,              1,                NV_FALSE,        pKernelHfrp       )
+#endif
+#if GPU_CHILD_MODULE(KERNEL_OOB)
+    GPU_CHILD_SINGLE_INST( KernelOob,            GPU_GET_KERNEL_OOB,                  1,                NV_FALSE,        pKernelOob        )
 #endif
 
 // Undefine the entry macros to simplify call sites

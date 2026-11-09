@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2025, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2015-2026, NVIDIA CORPORATION. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -104,66 +104,6 @@ static int nv_drm_revoke_sub_ownership(struct drm_device *dev);
 static DEFINE_MUTEX(dev_list_mutex);
 static struct nv_drm_device *dev_list = NULL;
 
-static const char* nv_get_input_colorspace_name(
-    enum nv_drm_input_color_space colorSpace)
-{
-    switch (colorSpace) {
-        case NV_DRM_INPUT_COLOR_SPACE_NONE:
-            return "None";
-        case NV_DRM_INPUT_COLOR_SPACE_SCRGB_LINEAR:
-            return "scRGB Linear FP16";
-        case NV_DRM_INPUT_COLOR_SPACE_BT2100_PQ:
-            return "BT.2100 PQ";
-        default:
-            /* We shoudn't hit this */
-            WARN_ON("Unsupported input colorspace");
-            return "None";
-    }
-};
-
-static char* nv_get_transfer_function_name(
-    enum nv_drm_transfer_function tf)
-{
-    switch (tf) {
-        case NV_DRM_TRANSFER_FUNCTION_LINEAR:
-            return "Linear";
-        case NV_DRM_TRANSFER_FUNCTION_PQ:
-            return "PQ (Perceptual Quantizer)";
-        default:
-            /* We shoudn't hit this */
-            WARN_ON("Unsupported transfer function");
-#if defined(fallthrough)
-            fallthrough;
-#else
-            /* Fallthrough */
-#endif
-        case NV_DRM_TRANSFER_FUNCTION_DEFAULT:
-            return "Default";
-    }
-};
-
-static const char* nv_get_dithering_mode_name(
-    enum nv_drm_dithering_mode mode)
-{
-    switch (mode) {
-        case NV_DRM_DITHERING_MODE_AUTO:
-            return "auto";
-        case NV_DRM_DITHERING_MODE_OFF:
-            return "off";
-        case NV_DRM_DITHERING_MODE_STATIC_2X2:
-            return "static 2x2";
-        case NV_DRM_DITHERING_MODE_DYNAMIC_2X2:
-            return "dynamic 2x2";
-        case NV_DRM_DITHERING_MODE_TEMPORAL:
-            return "temporal";
-        case NV_DRM_DITHERING_MODE_ON:
-            return "on";
-        default:
-            /* We shouldn't hit this, but return a safe default */
-            return "auto";
-    }
-};
-
 #if defined(NV_DRM_OUTPUT_POLL_CHANGED_PRESENT)
 static void nv_drm_output_poll_changed(struct drm_device *dev)
 {
@@ -230,6 +170,20 @@ static void nv_drm_event_callback(const struct NvKmsKapiEvent *event)
             nv_drm_handle_display_change(
                 nv_dev,
                 event->u.displayChanged.display);
+            break;
+
+        case NVKMS_EVENT_TYPE_DPY_CONTENT_PROTECTION_CHANGED:
+            nv_drm_handle_display_cp_change(
+                nv_dev,
+                event->u.displayCpChanged.display,
+                event->u.displayCpChanged.cp);
+            break;
+
+        case NVKMS_EVENT_TYPE_DPY_CP_TOPOLOGY_CHANGED:
+            nv_drm_handle_display_cp_topology_change(
+                nv_dev,
+                event->u.displayCpTopologyChanged.display,
+                event->u.displayCpTopologyChanged.topology);
             break;
 
         case NVKMS_EVENT_TYPE_DYNAMIC_DPY_CONNECTED:
@@ -522,26 +476,75 @@ static void nv_drm_enumerate_encoders_and_connectors
  */
 static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
 {
-    struct drm_prop_enum_list colorspace_enum_list[NV_DRM_INPUT_COLOR_SPACE_MAX] = { };
-    struct drm_prop_enum_list tf_enum_list[NV_DRM_TRANSFER_FUNCTION_MAX] = { };
-    struct drm_prop_enum_list dithering_mode_enum_list[NV_DRM_DITHERING_MODE_MAX] = { };
-    int i, len = 0;
+    const struct drm_prop_enum_list colorspace_enum_list[] = {
+        { .type = NV_DRM_INPUT_COLOR_SPACE_NONE,
+          .name = "None" },
+        { .type = NV_DRM_INPUT_COLOR_SPACE_SCRGB_LINEAR,
+          .name = "scRGB Linear FP16" },
+        { .type = NV_DRM_INPUT_COLOR_SPACE_BT2100_PQ,
+          .name = "BT.2100 PQ" },
+    };
 
-    for (i = 0; i < NV_DRM_INPUT_COLOR_SPACE_MAX; i++) {
-        colorspace_enum_list[len].type = i;
-        colorspace_enum_list[len].name = nv_get_input_colorspace_name(i);
-        len++;
-    }
+    const struct drm_prop_enum_list tf_enum_list[] = {
+        { .type = NV_DRM_TRANSFER_FUNCTION_LINEAR,
+          .name = "Linear" },
+        { .type = NV_DRM_TRANSFER_FUNCTION_PQ,
+          .name = "PQ (Perceptual Quantizer)" },
+        { .type = NV_DRM_TRANSFER_FUNCTION_DEFAULT,
+          .name = "Default" },
+    };
 
-    for (i = 0; i < NV_DRM_TRANSFER_FUNCTION_MAX; i++) {
-        tf_enum_list[i].type = i;
-        tf_enum_list[i].name = nv_get_transfer_function_name(i);
-    }
+    const struct drm_prop_enum_list dithering_mode_enum_list[] = {
+        { .type = NV_DRM_DITHERING_MODE_AUTO,
+          .name = "auto" },
+        { .type = NV_DRM_DITHERING_MODE_OFF,
+          .name = "off" },
+        { .type = NV_DRM_DITHERING_MODE_STATIC_2X2,
+          .name = "static 2x2" },
+        { .type = NV_DRM_DITHERING_MODE_DYNAMIC_2X2,
+          .name = "dynamic 2x2" },
+        { .type = NV_DRM_DITHERING_MODE_TEMPORAL,
+          .name = "temporal" },
+        { .type = NV_DRM_DITHERING_MODE_ON,
+          .name = "on" },
+    };
 
-    for (i = 0; i < NV_DRM_DITHERING_MODE_MAX; i++) {
-        dithering_mode_enum_list[i].type = i;
-        dithering_mode_enum_list[i].name = nv_get_dithering_mode_name(i);
-    }
+    const struct drm_prop_enum_list hdcp_level_enum_list[] = {
+        { .type = NVKMS_CONTENT_PROTECTION_OFF,
+          .name = "HDCP_OFF" },
+        { .type = NVKMS_CONTENT_PROTECTION_HDCP1X_ON,
+          .name = "HDCP1X_ON" },
+        { .type = NVKMS_CONTENT_PROTECTION_HDCP2X_TYPE0_ON,
+          .name = "HDCP2X_TYPE0_ON" },
+        { .type = NVKMS_CONTENT_PROTECTION_HDCP2X_TYPE1_ON,
+          .name = "HDCP2X_TYPE1_ON" },
+        { .type = NVKMS_CONTENT_PROTECTION_FAILED,
+          .name = "HDCP_FAILED" },
+    };
+
+    const struct drm_prop_enum_list color_format_enum_list[] = {
+        { .type = NV_DRM_CONNECTOR_COLOR_FORMAT_AUTO,
+          .name = "auto" },
+        { .type = NV_DRM_CONNECTOR_COLOR_FORMAT_RGB,
+          .name = "RGB" },
+        { .type = NV_DRM_CONNECTOR_COLOR_FORMAT_YCbCr422,
+          .name = "YCbCr422" },
+        { .type = NV_DRM_CONNECTOR_COLOR_FORMAT_YCbCr444,
+          .name = "YCbCr444" },
+    };
+
+    const struct drm_prop_enum_list output_bpc_enum_list[] = {
+        { .type = NV_DRM_CONNECTOR_OUTPUT_BPC_AUTO,
+          .name = "auto" },
+        { .type = NV_DRM_CONNECTOR_OUTPUT_BPC_6,
+          .name = "6" },
+        { .type = NV_DRM_CONNECTOR_OUTPUT_BPC_8,
+          .name = "8" },
+        { .type = NV_DRM_CONNECTOR_OUTPUT_BPC_10,
+          .name = "10" },
+        { .type = NV_DRM_CONNECTOR_OUTPUT_BPC_12,
+          .name = "12" },
+    };
 
     if (nv_dev->supportsSyncpts) {
         nv_dev->nv_out_fence_property =
@@ -554,9 +557,19 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
 
     nv_dev->nv_input_colorspace_property =
         drm_property_create_enum(nv_dev->dev, 0, "NV_INPUT_COLORSPACE",
-                                 colorspace_enum_list, len);
+                                 colorspace_enum_list,
+                                 ARRAY_SIZE(colorspace_enum_list));
     if (nv_dev->nv_input_colorspace_property == NULL) {
         NV_DRM_LOG_ERR("Failed to create NV_INPUT_COLORSPACE property");
+        return -ENOMEM;
+    }
+
+    nv_dev->nv_hdcp_level_property =
+        drm_property_create_enum(nv_dev->dev, 0, "NV_HDCP_LEVEL",
+                                 hdcp_level_enum_list,
+                                 ARRAY_SIZE(hdcp_level_enum_list));
+    if (nv_dev->nv_hdcp_level_property == NULL) {
+        NV_DRM_LOG_ERR("Failed to create NV_HDCP_LEVEL property");
         return -ENOMEM;
     }
 
@@ -602,7 +615,7 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
     nv_dev->nv_plane_degamma_tf_property =
         drm_property_create_enum(nv_dev->dev, 0,
             "NV_PLANE_DEGAMMA_TF", tf_enum_list,
-            NV_DRM_TRANSFER_FUNCTION_MAX);
+            ARRAY_SIZE(tf_enum_list));
     if (nv_dev->nv_plane_degamma_tf_property == NULL) {
         return -ENOMEM;
     }
@@ -626,7 +639,7 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
         return -ENOMEM;
     }
 
-    // TMO LUT + LUT Size
+    // TMO LUT + LUT Size + SAT-CORR enable
 
     nv_dev->nv_plane_tmo_lut_property =
         drm_property_create(nv_dev->dev, DRM_MODE_PROP_BLOB,
@@ -640,13 +653,22 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
     if (nv_dev->nv_plane_tmo_lut_size_property == NULL) {
         return -ENOMEM;
     }
+    /*
+     * Experimental property: userspace ABI and behavior are subject to change.
+     */
+    nv_dev->nv_plane_tmo_sat_corr_enable_property =
+        drm_property_create_bool(nv_dev->dev, 0,
+            "NV_PLANE_TMO_SAT_CORR_ENABLE");
+    if (nv_dev->nv_plane_tmo_sat_corr_enable_property == NULL) {
+        return -ENOMEM;
+    }
 
     // REGAMMA TF + LUT + LUT Size + Divisor
 
     nv_dev->nv_crtc_regamma_tf_property =
         drm_property_create_enum(nv_dev->dev, 0,
             "NV_CRTC_REGAMMA_TF", tf_enum_list,
-            NV_DRM_TRANSFER_FUNCTION_MAX);
+            ARRAY_SIZE(tf_enum_list));
     if (nv_dev->nv_crtc_regamma_tf_property == NULL) {
         return -ENOMEM;
     }
@@ -677,10 +699,83 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
         drm_property_create_enum(nv_dev->dev, 0,
                                  "dithering mode",
                                  dithering_mode_enum_list,
-                                 NV_DRM_DITHERING_MODE_MAX);
+                                 ARRAY_SIZE(dithering_mode_enum_list));
     if (nv_dev->nv_connector_dithering_mode_property == NULL) {
         NV_DRM_LOG_ERR("Failed to create dithering mode property");
         return -ENOMEM;
+    }
+
+    nv_dev->nv_connector_color_format_property =
+        drm_property_create_enum(nv_dev->dev, 0,
+                                 "NV_CONNECTOR_COLOR_FORMAT",
+                                 color_format_enum_list,
+                                 ARRAY_SIZE(color_format_enum_list));
+    if (nv_dev->nv_connector_color_format_property == NULL) {
+        NV_DRM_LOG_ERR("Failed to create color format property");
+        return -ENOMEM;
+    }
+
+    nv_dev->nv_connector_output_bpc_property =
+        drm_property_create_enum(nv_dev->dev, 0,
+                                 "NV_CONNECTOR_OUTPUT_BPC",
+                                 output_bpc_enum_list,
+                                 ARRAY_SIZE(output_bpc_enum_list));
+    if (nv_dev->nv_connector_output_bpc_property == NULL) {
+        NV_DRM_LOG_ERR("Failed to create output bpc property");
+        return -ENOMEM;
+    }
+
+    // Color Pipeline Passthrough Properties
+    nv_dev->nv_plane_color_passthrough_property =
+        drm_property_create_bool(nv_dev->dev, 0,
+            "NV_PLANE_COLOR_PASSTHROUGH");
+    if (nv_dev->nv_plane_color_passthrough_property == NULL) {
+        return -ENOMEM;
+    }
+    nv_dev->nv_crtc_color_passthrough_property =
+        drm_property_create_bool(nv_dev->dev, 0,
+            "NV_CRTC_COLOR_PASSTHROUGH");
+    if (nv_dev->nv_crtc_color_passthrough_property == NULL) {
+        return -ENOMEM;
+    }
+
+    /* hdcp_topology is immutable by user space */
+    nv_dev->nv_hdcp_topology_property =
+        drm_property_create(nv_dev->dev, DRM_MODE_PROP_BLOB | DRM_MODE_PROP_IMMUTABLE,
+            "NV_HDCP_TOPOLOGY", 0);
+    if (nv_dev->nv_hdcp_topology_property == NULL) {
+        return -ENOMEM;
+    }
+
+    // HDMI Vendor Specific InfoFrame Metadata
+    nv_dev->nv_connector_hdmi_vsif_metadata_property =
+        drm_property_create(nv_dev->dev, DRM_MODE_PROP_BLOB,
+            "NV_HDMI_VSIF_METADATA", 0);
+    if (nv_dev->nv_connector_hdmi_vsif_metadata_property == NULL) {
+        return -ENOMEM;
+    }
+
+    /* ALLM capable (read-only, populated from EDID) */
+    nv_dev->nv_connector_allm_capable_property =
+        drm_property_create_bool(nv_dev->dev,
+            DRM_MODE_PROP_IMMUTABLE, "NV_ALLM_CAPABLE");
+    if (nv_dev->nv_connector_allm_capable_property == NULL) {
+        return -ENOMEM;
+    }
+
+    {
+        static const struct drm_prop_enum_list allmModeEnumList[] = {
+            { NV_DRM_ALLM_MODE_DISABLED,        "Disabled"  },
+            { NV_DRM_ALLM_MODE_ENABLED_DYNAMIC, "Dynamic"   },
+            { NV_DRM_ALLM_MODE_ENABLED_FORCED,  "Always On" },
+        };
+        nv_dev->nv_connector_allm_mode_property =
+            drm_property_create_enum(nv_dev->dev, 0, "NV_ALLM_MODE",
+                allmModeEnumList,
+                ARRAY_SIZE(allmModeEnumList));
+        if (nv_dev->nv_connector_allm_mode_property == NULL) {
+            return -ENOMEM;
+        }
     }
 
     return 0;
@@ -703,6 +798,35 @@ static void nv_drm_handle_hotplug_event(struct work_struct *work)
         container_of(dwork, struct nv_drm_device, hotplug_event_work);
 
     drm_kms_helper_hotplug_event(nv_dev->dev);
+}
+
+static void nv_drm_handle_content_protection_event_work(struct work_struct *work)
+{
+    struct delayed_work *dwork = to_delayed_work(work);
+    struct nv_drm_device *nv_dev =
+        container_of(dwork, struct nv_drm_device,
+                     content_protection_event_work);
+    struct drm_device *dev = nv_dev->dev;
+    struct drm_connector *connector;
+    struct drm_connector_list_iter conn_iter;
+
+    mutex_lock(&dev->mode_config.mutex);
+    drm_modeset_lock(&dev->mode_config.connection_mutex, NULL);
+
+    drm_connector_list_iter_begin(dev, &conn_iter);
+
+    drm_for_each_connector_iter(connector, &conn_iter) {
+        struct nv_drm_connector *nv_connector = to_nv_connector(connector);
+        if (nv_connector->cp_event_pending) {
+            nv_connector->cp_event_pending = false;
+            nv_drm_connector_update_content_protection(nv_connector);
+        }
+    }
+
+    drm_connector_list_iter_end(&conn_iter);
+
+    drm_modeset_unlock(&dev->mode_config.connection_mutex);
+    mutex_unlock(&dev->mode_config.mutex);
 }
 
 static int nv_drm_dev_load(struct drm_device *dev)
@@ -800,6 +924,10 @@ static int nv_drm_dev_load(struct drm_device *dev)
 
     nv_dev->supportsSyncpts = resInfo.caps.supportsSyncpts;
 
+    nv_dev->supportsColorPassthrough = resInfo.caps.supportsColorPassthrough;
+
+    nv_dev->isSocDgpuDisplayNeedingWar = resInfo.caps.isSocDgpuDisplayNeedingWar;
+
     nv_dev->semsurf_stride = resInfo.caps.semsurf.stride;
 
     nv_dev->semsurf_max_submitted_offset =
@@ -829,6 +957,9 @@ static int nv_drm_dev_load(struct drm_device *dev)
     nv_dev->modifiers[i++] = DRM_FORMAT_MOD_LINEAR;
     nv_dev->modifiers[i++] = DRM_FORMAT_MOD_INVALID;
 
+    mutex_init(&nv_dev->drm_lut_surface_pool_mutex);
+    INIT_LIST_HEAD(&nv_dev->drm_lut_surface_pool);
+
     /* Initialize drm_device::mode_config */
 
     nv_drm_init_mode_config(nv_dev, &resInfo);
@@ -850,6 +981,8 @@ static int nv_drm_dev_load(struct drm_device *dev)
             nv_dev->pDevice,
             ((1 << NVKMS_EVENT_TYPE_DPY_CHANGED) |
              (1 << NVKMS_EVENT_TYPE_DYNAMIC_DPY_CONNECTED) |
+             (1 << NVKMS_EVENT_TYPE_DPY_CONTENT_PROTECTION_CHANGED) |
+             (1 << NVKMS_EVENT_TYPE_DPY_CP_TOPOLOGY_CHANGED) |
              (1 << NVKMS_EVENT_TYPE_FLIP_OCCURRED)))) {
         NV_DRM_DEV_LOG_ERR(nv_dev, "Failed to register event mask");
     }
@@ -886,6 +1019,8 @@ static int nv_drm_dev_load(struct drm_device *dev)
     /* Enable event handling */
 
     INIT_DELAYED_WORK(&nv_dev->hotplug_event_work, nv_drm_handle_hotplug_event);
+    INIT_DELAYED_WORK(&nv_dev->content_protection_event_work,
+                      nv_drm_handle_content_protection_event_work);
     atomic_set(&nv_dev->enable_event_handling, true);
 
     init_waitqueue_head(&nv_dev->flip_event_wq);
@@ -916,14 +1051,22 @@ static void nv_drm_dev_unload(struct drm_device *dev)
     }
 #endif
 
-    cancel_delayed_work_sync(&nv_dev->hotplug_event_work);
     mutex_lock(&nv_dev->lock);
 
     WARN_ON(nv_dev->subOwnershipGranted);
 
-    /* Disable event handling */
+    /* Disable event handling.
+     *
+     * Set the flag under nv_dev->lock so that any event callback already
+     * holding the lock has finished before we clear it, ensuring no callback
+     * can see enable_event_handling=true and call schedule_delayed_work() after
+     * the cancel calls below return.  Neither worker takes nv_dev->lock, so
+     * cancel_delayed_work_sync() cannot deadlock here.
+     */
 
     atomic_set(&nv_dev->enable_event_handling, false);
+    cancel_delayed_work_sync(&nv_dev->hotplug_event_work);
+    cancel_delayed_work_sync(&nv_dev->content_protection_event_work);
 
     /* Clean up output polling */
 
@@ -940,6 +1083,8 @@ static void nv_drm_dev_unload(struct drm_device *dev)
     if (!nvKms->declareEventInterest(nv_dev->pDevice, 0x0)) {
         NV_DRM_DEV_LOG_ERR(nv_dev, "Failed to stop event listening");
     }
+
+    nv_free_drm_lut_surface_pool(nv_dev);
 
     /* Unset NvKmsKapiDevice */
 
@@ -979,7 +1124,9 @@ static void nv_drm_master_set(struct drm_device *dev,
                               struct drm_file *file_priv, bool from_open)
 {
     if (__nv_drm_master_set(dev, file_priv, from_open) != 0) {
-        NV_DRM_DEV_LOG_ERR(to_nv_device(dev), "Failed to grab modeset ownership");
+        NV_DRM_DEV_LOG_WARN(
+            to_nv_device(dev),
+            "Failed to grab modeset ownership - another instance currently has modeset ownership");
     }
 }
 #endif
@@ -1841,6 +1988,12 @@ static const struct drm_ioctl_desc nv_drm_ioctls[] = {
     DRM_IOCTL_DEF_DRV(NVIDIA_SEMSURF_FENCE_ATTACH,
                       nv_drm_semsurf_fence_attach_ioctl,
                       DRM_RENDER_ALLOW|DRM_UNLOCKED),
+    DRM_IOCTL_DEF_DRV(NVIDIA_SEMSURF_EXPORT_TO_SYNCOBJ_POINT,
+                      nv_drm_semsurf_export_to_syncobj_point_ioctl,
+                      DRM_RENDER_ALLOW|DRM_UNLOCKED),
+    DRM_IOCTL_DEF_DRV(NVIDIA_SYNCOBJ_GET_SYNCFD,
+                      nv_drm_syncobj_get_syncfd_ioctl,
+                      DRM_RENDER_ALLOW|DRM_UNLOCKED),
 
     /*
      * DRM_UNLOCKED is implicit for all non-legacy DRM driver IOCTLs since Linux
@@ -2262,6 +2415,34 @@ void nv_drm_remove_devices(void)
 }
 
 /*
+ * Mark the connection status of all connectors dirty and schedule a
+ * hotplug event, so that both the fbdev helper and userspace DRM clients
+ * re-detect connectors and restore modes as appropriate.
+ */
+static void nv_drm_reprobe_connectors(struct nv_drm_device *nv_dev)
+{
+    struct drm_device *dev = nv_dev->dev;
+    struct drm_connector *connector = NULL;
+    struct drm_connector_list_iter conn_iter;
+
+    drm_connector_list_iter_begin(dev, &conn_iter);
+    drm_for_each_connector_iter(connector, &conn_iter) {
+        nv_drm_connector_mark_connection_status_dirty(
+            to_nv_connector(connector));
+    }
+    drm_connector_list_iter_end(&conn_iter);
+
+    /*
+     * Delay the hotplug event: this is called from the resume path while
+     * other devices are still resuming, and the system workqueue is not
+     * frozen.  An immediate hotplug event could drive a modeset (fbdev
+     * helper or DRM client) concurrently with the device-resume phase.
+     */
+    schedule_delayed_work(&nv_dev->hotplug_event_work,
+                          msecs_to_jiffies(2000));
+}
+
+/*
  * Handle system suspend and resume.
  *
  * Normally, a DRM driver would use drm_mode_config_helper_suspend() to save the
@@ -2326,6 +2507,29 @@ void nv_drm_suspend_resume(NvBool suspend)
             drm_fb_helper_set_suspend_unlocked(dev->fb_helper, 0);
 #endif
             drm_kms_helper_poll_enable(dev);
+
+            /*
+             * XXX: Workaround for bug 6422321, tracked for removal by
+             * bug 6556017.
+             *
+             * On resume, the affected devices come up with all heads
+             * shut down and the modeset owner is never notified, and
+             * display detection can trust a stale deasserted HPD and
+             * skip DDC (bug 6490670), so a monitor that dropped HPD
+             * during suspend stays undetected.  If a sink stays
+             * connected across suspend, resume generates no HPD edge,
+             * and NVKMS only re-detects DisplayPort connectors on
+             * resume (nvRmResumeDP()).  Any connector probe that raced
+             * with resume may also have latched a stale "disconnected"
+             * status.  Force a re-probe of all connectors and send a
+             * hotplug event so the DRM client re-detects and restores
+             * the mode, like nv_drm_dev_load() does at boot.  Restrict
+             * this to SoC products with dGPU-class display so other
+             * GPUs keep the stock resume behavior.
+             */
+            if (nv_dev->isSocDgpuDisplayNeedingWar) {
+                nv_drm_reprobe_connectors(nv_dev);
+            }
         }
     }
 

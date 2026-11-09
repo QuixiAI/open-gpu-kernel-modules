@@ -41,23 +41,13 @@ NV_STATUS __nvoc_down_thunk_VirtMemAllocator_engstateStateInitLocked(struct OBJG
 NV_STATUS __nvoc_down_thunk_VirtMemAllocator_engstateStatePostLoad(struct OBJGPU *pGpu, struct OBJENGSTATE *pDma, NvU32 arg3);    // this
 
 // Up-thunk(s) to bridge VirtMemAllocator methods to ancestors (if any)
-void __nvoc_up_thunk_OBJENGSTATE_dmaInitMissing(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStatePreInitLocked(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStatePreInitUnlocked(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStateInitUnlocked(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStatePreLoad(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate, NvU32 arg3);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStateLoad(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate, NvU32 arg3);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStatePreUnload(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate, NvU32 arg3);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStateUnload(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate, NvU32 arg3);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStatePostUnload(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate, NvU32 arg3);    // this
-void __nvoc_up_thunk_OBJENGSTATE_dmaStateDestroy(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate);    // this
-NvBool __nvoc_up_thunk_OBJENGSTATE_dmaIsPresent(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate);    // this
 
 // Class-specific details for VirtMemAllocator
 const struct NVOC_CLASS_DEF __nvoc_class_def_VirtMemAllocator = 
 {
     .classInfo.size =               sizeof(VirtMemAllocator),
     .classInfo.classId =            classId(VirtMemAllocator),
+    .classInfo.visibility =         NVOC_EVENT_VISIBILITY_NONEVENT,
     .classInfo.providerId =         &__nvoc_rtti_provider,
 #if NV_PRINTF_STRINGS_ALLOWED
     .classInfo.name =               "VirtMemAllocator",
@@ -68,7 +58,7 @@ const struct NVOC_CLASS_DEF __nvoc_class_def_VirtMemAllocator =
 };
 
 
-// Metadata with per-class RTTI and vtable with ancestor(s)
+// Metadata with per-class RTTI with ancestor(s)
 static const struct NVOC_METADATA__VirtMemAllocator __nvoc_metadata__VirtMemAllocator = {
     .rtti.pClassDef = &__nvoc_class_def_VirtMemAllocator,    // (dma) this
     .rtti.dtor      = &__nvoc_dtor_VirtMemAllocator,
@@ -80,33 +70,21 @@ static const struct NVOC_METADATA__VirtMemAllocator __nvoc_metadata__VirtMemAllo
     .metadata__OBJENGSTATE.metadata__Object.rtti.dtor      = &__nvoc_destructFromBase,
     .metadata__OBJENGSTATE.metadata__Object.rtti.offset    = NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE.__nvoc_base_Object),
 
-    .vtable.__dmaConstructEngine__ = &dmaConstructEngine_IMPL,    // virtual override (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateConstructEngine__ = &__nvoc_down_thunk_VirtMemAllocator_engstateConstructEngine,    // virtual
-    .vtable.__dmaStateInitLocked__ = &dmaStateInitLocked_IMPL,    // virtual override (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateInitLocked__ = &__nvoc_down_thunk_VirtMemAllocator_engstateStateInitLocked,    // virtual
-    .vtable.__dmaStatePostLoad__ = &dmaStatePostLoad_GM107,    // virtual halified (singleton optimized) override (engstate) base (engstate) body
     .metadata__OBJENGSTATE.vtable.__engstateStatePostLoad__ = &__nvoc_down_thunk_VirtMemAllocator_engstateStatePostLoad,    // virtual
-    .vtable.__dmaInitMissing__ = &__nvoc_up_thunk_OBJENGSTATE_dmaInitMissing,    // virtual inherited (engstate) base (engstate)
+    .metadata__OBJENGSTATE.vtable.__engstateConstructApertures__ = &engstateConstructApertures_IMPL,    // virtual
+    .metadata__OBJENGSTATE.vtable.__engstateDestructApertures__ = &engstateDestructApertures_IMPL,    // virtual
     .metadata__OBJENGSTATE.vtable.__engstateInitMissing__ = &engstateInitMissing_IMPL,    // virtual
-    .vtable.__dmaStatePreInitLocked__ = &__nvoc_up_thunk_OBJENGSTATE_dmaStatePreInitLocked,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePreInitLocked__ = &engstateStatePreInitLocked_IMPL,    // virtual
-    .vtable.__dmaStatePreInitUnlocked__ = &__nvoc_up_thunk_OBJENGSTATE_dmaStatePreInitUnlocked,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePreInitUnlocked__ = &engstateStatePreInitUnlocked_IMPL,    // virtual
-    .vtable.__dmaStateInitUnlocked__ = &__nvoc_up_thunk_OBJENGSTATE_dmaStateInitUnlocked,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateInitUnlocked__ = &engstateStateInitUnlocked_IMPL,    // virtual
-    .vtable.__dmaStatePreLoad__ = &__nvoc_up_thunk_OBJENGSTATE_dmaStatePreLoad,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePreLoad__ = &engstateStatePreLoad_IMPL,    // virtual
-    .vtable.__dmaStateLoad__ = &__nvoc_up_thunk_OBJENGSTATE_dmaStateLoad,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateLoad__ = &engstateStateLoad_IMPL,    // virtual
-    .vtable.__dmaStatePreUnload__ = &__nvoc_up_thunk_OBJENGSTATE_dmaStatePreUnload,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePreUnload__ = &engstateStatePreUnload_IMPL,    // virtual
-    .vtable.__dmaStateUnload__ = &__nvoc_up_thunk_OBJENGSTATE_dmaStateUnload,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateUnload__ = &engstateStateUnload_IMPL,    // virtual
-    .vtable.__dmaStatePostUnload__ = &__nvoc_up_thunk_OBJENGSTATE_dmaStatePostUnload,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePostUnload__ = &engstateStatePostUnload_IMPL,    // virtual
-    .vtable.__dmaStateDestroy__ = &__nvoc_up_thunk_OBJENGSTATE_dmaStateDestroy,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateDestroy__ = &engstateStateDestroy_IMPL,    // virtual
-    .vtable.__dmaIsPresent__ = &__nvoc_up_thunk_OBJENGSTATE_dmaIsPresent,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateIsPresent__ = &engstateIsPresent_IMPL,    // virtual
 };
 
@@ -125,75 +103,17 @@ const struct NVOC_CASTINFO __nvoc_castinfo__VirtMemAllocator = {
 
 // dmaConstructEngine: virtual override (engstate) base (engstate)
 NV_STATUS __nvoc_down_thunk_VirtMemAllocator_engstateConstructEngine(struct OBJGPU *pGpu, struct OBJENGSTATE *pDma, ENGDESCRIPTOR arg3) {
-    return dmaConstructEngine(pGpu, (struct VirtMemAllocator *)(((unsigned char *) pDma) - NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)), arg3);
+    return dmaConstructEngine_IMPL(pGpu, (struct VirtMemAllocator *)(((unsigned char *) pDma) - NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)), arg3);
 }
 
 // dmaStateInitLocked: virtual override (engstate) base (engstate)
 NV_STATUS __nvoc_down_thunk_VirtMemAllocator_engstateStateInitLocked(struct OBJGPU *pGpu, struct OBJENGSTATE *pDma) {
-    return dmaStateInitLocked(pGpu, (struct VirtMemAllocator *)(((unsigned char *) pDma) - NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)));
+    return dmaStateInitLocked_IMPL(pGpu, (struct VirtMemAllocator *)(((unsigned char *) pDma) - NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)));
 }
 
 // dmaStatePostLoad: virtual halified (singleton optimized) override (engstate) base (engstate) body
 NV_STATUS __nvoc_down_thunk_VirtMemAllocator_engstateStatePostLoad(struct OBJGPU *pGpu, struct OBJENGSTATE *pDma, NvU32 arg3) {
-    return dmaStatePostLoad(pGpu, (struct VirtMemAllocator *)(((unsigned char *) pDma) - NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-
-// 11 up-thunk(s) defined to bridge methods in VirtMemAllocator to superclasses
-
-// dmaInitMissing: virtual inherited (engstate) base (engstate)
-void __nvoc_up_thunk_OBJENGSTATE_dmaInitMissing(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate) {
-    engstateInitMissing(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)));
-}
-
-// dmaStatePreInitLocked: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStatePreInitLocked(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate) {
-    return engstateStatePreInitLocked(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)));
-}
-
-// dmaStatePreInitUnlocked: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStatePreInitUnlocked(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate) {
-    return engstateStatePreInitUnlocked(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)));
-}
-
-// dmaStateInitUnlocked: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStateInitUnlocked(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate) {
-    return engstateStateInitUnlocked(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)));
-}
-
-// dmaStatePreLoad: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStatePreLoad(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate, NvU32 arg3) {
-    return engstateStatePreLoad(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-// dmaStateLoad: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStateLoad(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate, NvU32 arg3) {
-    return engstateStateLoad(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-// dmaStatePreUnload: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStatePreUnload(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate, NvU32 arg3) {
-    return engstateStatePreUnload(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-// dmaStateUnload: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStateUnload(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate, NvU32 arg3) {
-    return engstateStateUnload(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-// dmaStatePostUnload: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_dmaStatePostUnload(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate, NvU32 arg3) {
-    return engstateStatePostUnload(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-// dmaStateDestroy: virtual inherited (engstate) base (engstate)
-void __nvoc_up_thunk_OBJENGSTATE_dmaStateDestroy(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate) {
-    engstateStateDestroy(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)));
-}
-
-// dmaIsPresent: virtual inherited (engstate) base (engstate)
-NvBool __nvoc_up_thunk_OBJENGSTATE_dmaIsPresent(struct OBJGPU *pGpu, struct VirtMemAllocator *pEngstate) {
-    return engstateIsPresent(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)));
+    return dmaStatePostLoad_GM107(pGpu, (struct VirtMemAllocator *)(((unsigned char *) pDma) - NV_OFFSETOF(VirtMemAllocator, __nvoc_base_OBJENGSTATE)), arg3);
 }
 
 
@@ -232,15 +152,9 @@ void __nvoc_init_dataField_VirtMemAllocator(VirtMemAllocator *pThis, GpuHalspecO
     PORT_UNREFERENCED_VARIABLE(rmVariantHal);
     PORT_UNREFERENCED_VARIABLE(rmVariantHal_HalVarIdx);
 
-    // Hal field -- bDmaShaderAccessSupported
-    // default
-    {
-        pThis->bDmaShaderAccessSupported = NV_FALSE;
-    }
-
     // Hal field -- bDmaIsSupportedSparseVirtual
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbdf0ffe0UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: TU102 | TU104 | TU106 | TU116 | TU117 | GA100 | GA102 | GA103 | GA104 | GA106 | GA107 | AD102 | AD103 | AD104 | AD106 | AD107 | GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfdf0ffe0UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: TU102 | TU104 | TU106 | TU116 | TU117 | GA100 | GA102 | GA103 | GA104 | GA106 | GA107 | AD102 | AD103 | AD104 | AD106 | AD107 | GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->bDmaIsSupportedSparseVirtual = NV_TRUE;
     }
@@ -251,8 +165,8 @@ void __nvoc_init_dataField_VirtMemAllocator(VirtMemAllocator *pThis, GpuHalspecO
     }
 
     // Hal field -- bDmaEnforce32BitPointer
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbdf0ffe0UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: TU102 | TU104 | TU106 | TU116 | TU117 | GA100 | GA102 | GA103 | GA104 | GA106 | GA107 | AD102 | AD103 | AD104 | AD106 | AD107 | GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfdf0ffe0UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: TU102 | TU104 | TU106 | TU116 | TU117 | GA100 | GA102 | GA103 | GA104 | GA106 | GA107 | AD102 | AD103 | AD104 | AD106 | AD107 | GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->bDmaEnforce32BitPointer = NV_TRUE;
     }
@@ -260,12 +174,6 @@ void __nvoc_init_dataField_VirtMemAllocator(VirtMemAllocator *pThis, GpuHalspecO
     else
     {
         pThis->bDmaEnforce32BitPointer = NV_FALSE;
-    }
-
-    // Hal field -- bDmaEnableFullCompTagLine
-    // default
-    {
-        pThis->bDmaEnableFullCompTagLine = NV_FALSE;
     }
 
     // Hal field -- bDmaMultipleVaspaceSupported
@@ -310,7 +218,7 @@ static void __nvoc_init_funcTable_VirtMemAllocator_1(VirtMemAllocator *pThis, Gp
     PORT_UNREFERENCED_VARIABLE(rmVariantHal_HalVarIdx);
 
     // dmaAllocMapping -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__dmaAllocMapping__ = &dmaAllocMapping_395e98;
     }
@@ -320,7 +228,7 @@ static void __nvoc_init_funcTable_VirtMemAllocator_1(VirtMemAllocator *pThis, Gp
     }
 
     // dmaFreeMapping -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__dmaFreeMapping__ = &dmaFreeMapping_395e98;
     }
@@ -330,8 +238,8 @@ static void __nvoc_init_funcTable_VirtMemAllocator_1(VirtMemAllocator *pThis, Gp
     }
 
     // dmaAllocBar1P2PMapping -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__dmaAllocBar1P2PMapping__ = &dmaAllocBar1P2PMapping_GH100;
     }
@@ -342,8 +250,8 @@ static void __nvoc_init_funcTable_VirtMemAllocator_1(VirtMemAllocator *pThis, Gp
     }
 
     // dmaFreeBar1P2PMapping -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__dmaFreeBar1P2PMapping__ = &dmaFreeBar1P2PMapping_GH100;
     }
@@ -354,7 +262,7 @@ static void __nvoc_init_funcTable_VirtMemAllocator_1(VirtMemAllocator *pThis, Gp
     }
 
     // dmaIsDefaultGpuUncached -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__dmaIsDefaultGpuUncached__ = &dmaIsDefaultGpuUncached_d69453;
     }
@@ -364,7 +272,7 @@ static void __nvoc_init_funcTable_VirtMemAllocator_1(VirtMemAllocator *pThis, Gp
     }
 
     // dmaUpdateVASpace -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__dmaUpdateVASpace__ = &dmaUpdateVASpace_395e98;
     }
@@ -374,7 +282,7 @@ static void __nvoc_init_funcTable_VirtMemAllocator_1(VirtMemAllocator *pThis, Gp
     }
 
     // dmaXlateVAtoPAforChannel -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
         pThis->__dmaXlateVAtoPAforChannel__ = &dmaXlateVAtoPAforChannel_395e98;
     }
@@ -384,9 +292,9 @@ static void __nvoc_init_funcTable_VirtMemAllocator_1(VirtMemAllocator *pThis, Gp
     }
 
     // dmaGetPTESize -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
-        pThis->__dmaGetPTESize__ = &dmaGetPTESize_474d46;
+        // NVOC_UNREACHABLE, NULL-initialized.
     }
     else
     {
@@ -394,9 +302,9 @@ static void __nvoc_init_funcTable_VirtMemAllocator_1(VirtMemAllocator *pThis, Gp
     }
 
     // dmaMapBuffer -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
-        pThis->__dmaMapBuffer__ = &dmaMapBuffer_5baef9;
+        // NVOC_UNREACHABLE, NULL-initialized.
     }
     else
     {
@@ -404,9 +312,9 @@ static void __nvoc_init_funcTable_VirtMemAllocator_1(VirtMemAllocator *pThis, Gp
     }
 
     // dmaUnmapBuffer -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T239D | T264D */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 3UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x0000e000UL) )) /* ChipHal: T234D | T238D | T264D */ 
     {
-        pThis->__dmaUnmapBuffer__ = &dmaUnmapBuffer_f2d351;
+        // NVOC_UNREACHABLE, NULL-initialized.
     }
     else
     {
@@ -415,7 +323,7 @@ static void __nvoc_init_funcTable_VirtMemAllocator_1(VirtMemAllocator *pThis, Gp
 } // End __nvoc_init_funcTable_VirtMemAllocator_1 with approximately 20 basic block(s).
 
 
-// Initialize vtable(s) for 24 virtual method(s).
+// Initialize vtable(s) for 10 virtual method(s).
 void __nvoc_init_funcTable_VirtMemAllocator(VirtMemAllocator *pThis, GpuHalspecOwner *pGpuhalspecowner, RmHalspecOwner *pRmhalspecowner) {
 
     // Initialize vtable(s) with 10 per-object function pointer(s).

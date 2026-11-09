@@ -43,6 +43,7 @@ const struct NVOC_CLASS_DEF __nvoc_class_def_OBJENGSTATE =
 {
     .classInfo.size =               sizeof(OBJENGSTATE),
     .classInfo.classId =            classId(OBJENGSTATE),
+    .classInfo.visibility =         NVOC_EVENT_VISIBILITY_NONEVENT,
     .classInfo.providerId =         &__nvoc_rtti_provider,
 #if NV_PRINTF_STRINGS_ALLOWED
     .classInfo.name =               "OBJENGSTATE",
@@ -63,6 +64,8 @@ static const struct NVOC_METADATA__OBJENGSTATE __nvoc_metadata__OBJENGSTATE = {
     .metadata__Object.rtti.offset    = NV_OFFSETOF(OBJENGSTATE, __nvoc_base_Object),
 
     .vtable.__engstateConstructEngine__ = &engstateConstructEngine_IMPL,    // virtual
+    .vtable.__engstateConstructApertures__ = &engstateConstructApertures_IMPL,    // virtual
+    .vtable.__engstateDestructApertures__ = &engstateDestructApertures_IMPL,    // virtual
     .vtable.__engstateInitMissing__ = &engstateInitMissing_IMPL,    // virtual
     .vtable.__engstateStatePreInitLocked__ = &engstateStatePreInitLocked_IMPL,    // virtual
     .vtable.__engstateStatePreInitUnlocked__ = &engstateStatePreInitUnlocked_IMPL,    // virtual
@@ -140,7 +143,7 @@ static void __nvoc_init_funcTable_OBJENGSTATE_1(OBJENGSTATE *pThis) {
 } // End __nvoc_init_funcTable_OBJENGSTATE_1
 
 
-// Initialize vtable(s) for 14 virtual method(s).
+// Initialize vtable(s) for 16 virtual method(s).
 void __nvoc_init_funcTable_OBJENGSTATE(OBJENGSTATE *pThis) {
     __nvoc_init_funcTable_OBJENGSTATE_1(pThis);
 }

@@ -43,20 +43,20 @@
 
 #define CP_READ_REGISTER(reg)                                   \
     ({                                                          \
-        NvU32 __res;                                            \
+        NvU64 __res;                                            \
                                                                 \
         asm("mrs %0, " reg "\r\t"                               \
             : "=r" (__res)                                      \
            );                                                   \
                                                                 \
-        __res;                                                  \
+        (NvU32)__res;                                           \
     })
 
 #define CP_WRITE_REGISTER(reg, val)                             \
     ({                                                          \
         asm("msr " reg ", %0\r\t"                               \
             :                                                   \
-            : "r" (val)                                         \
+            : "r" ((NvU64)(val))                                \
            );                                                   \
     })
 

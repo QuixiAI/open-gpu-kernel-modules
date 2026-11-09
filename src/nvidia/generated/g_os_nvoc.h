@@ -210,6 +210,7 @@ typedef struct RM_PAGEABLE_SECTION {
 // Flags needed by osAllocPagesNode
 #define OS_ALLOC_PAGES_NODE_NONE                0x0
 #define OS_ALLOC_PAGES_NODE_SKIP_RECLAIM        0x1
+#define OS_ALLOC_PAGES_NODE_DO_ACCOUNT          0x2
 
 // Flags needed by osGetCurrentProccessFlags
 #define OS_CURRENT_PROCESS_FLAG_NONE            0x0
@@ -322,7 +323,6 @@ NV_STATUS  osReadRegistryDwordBase(OBJGPU *, const char *, NvU32 *);
 NV_STATUS  osReadRegistryStringBase(OBJGPU *, const char *, NvU8 *, NvU32 *);
 NV_STATUS  osPackageRegistry(OBJGPU *, PACKED_REGISTRY_TABLE *, NvU32 *);
 NV_STATUS  osUnpackageRegistry(PACKED_REGISTRY_TABLE *);
-NvBool     osQueueDpc(OBJGPU *);
 void       osFlushCpuWriteCombineBuffer(void);
 NV_STATUS  osNumaMemblockSize(NvU64 *);
 NvBool     osNumaOnliningEnabled(OS_GPU_INFO *);
@@ -344,22 +344,25 @@ typedef enum
 NvCgroupImpl osCgroupImplementation(void);
 typedef NvP64 ClientGroupID;
 ClientGroupID osClientGroupID(NvU64 process, void *pidInfo); // from osGetCurrentProcess or equivalent
-void *osCgroupRegisterRegion(OBJGPU *pGpu, NvU64 size);
-void osCgroupUnregisterRegion(void *region);
-NV_STATUS osMemacctTryCharge(void *pRegion, NvLength size, void **ppPool);
+void *osCgroupRegisterRegion(OBJGPU *pGpu, NvU64 size, NvU64 precharge, void **prechargePool);
+void osCgroupUnregisterRegion(void *region, void *prechargePool, NvU64 precharge);
+NV_STATUS osMemacctTryCharge(void *pRegion, NvLength size, void **ppPool, void **limitPool);
 void osMemacctReleaseCharge(void *pool, NvLength size);
+void osMemacctPoolStatePut(void *pool);
 void *osCgroupGetFromFd(NvS32 fd);
 void osCgroupPut(void *cgroup);
+void *osCgroupParent(void *cgroup);
+NvBool osCgroupCanEvict(void *limitPool, void *testPool);
 
 NV_STATUS  NV_FORCERESULTCHECK osAcquireRmSema(void *);
 NV_STATUS  NV_FORCERESULTCHECK osCondAcquireRmSema(void *);
-NvU32      osReleaseRmSema(void *, OBJGPU *);
+void       osReleaseRmSema(void *, OBJGPU *);
 
 #define DPC_RELEASE_ALL_GPU_LOCKS                       (1)
 #define DPC_RELEASE_SINGLE_GPU_LOCK                     (2)
 
-NV_STATUS   osGpuLocksQueueRelease(OBJGPU *pGpu, NvU32 dpcGpuLockRelease);
-NvU32       osApiLockAcquireConfigureFlags(NvU32 flags);
+#define osGpuLocksQueueRelease(...)
+#define osApiLockAcquireConfigureFlags(flags) (flags)
 
 NvU32      osGetCpuCount(void);
 NvU32      osGetMaximumCoreCount(void);
@@ -370,6 +373,7 @@ NV_STATUS  osDelayNs(NvU32);
 void       osSpinLoop(void);
 NvU64      osGetMaxUserVa(void);
 NvU32      osGetCpuVaAddrShift(void);
+NvBool     osTdispIsEnabled(OBJGPU *pGpu);
 NvU32      osGetCurrentProcess(void);
 void       osGetCurrentProcessName(char *, NvU32);
 NvU32      osGetCurrentPasid(void);
@@ -626,6 +630,35 @@ NV_STATUS  osFlushCpuCache(void);
 void       osAddRecordForCrashLog(void *, NvU32);
 void       osDeleteRecordForCrashLog(void *);
 
+//
+// Fetch the realm-cached device attestation certificate for this GPU.
+//
+// On a CCA/TDISP realm guest the host caches per-device attestation objects
+// (certificate, measurements, interface report). This reads back the device
+// certificate object via the RSI/RHI host-call ABI. The hypercall itself and
+// the host-shared memory it needs live in the Unix/Linux OS layer; portable RM
+// only supplies the destination buffer.
+//
+// On entry *pBufferSize is the capacity of pBuffer in bytes; on return it holds
+// the certificate's actual size. Returns NV_ERR_BUFFER_TOO_SMALL (with
+// *pBufferSize set to the required size) when the certificate does not fit.
+//
+NV_STATUS osReadDeviceCertificate(OBJGPU *pGpu, NvU8 *pBuffer, NvU32 *pBufferSize);
+
+//
+// Fetch the TSM's digest of the device certificate and hash pCertChain with the
+// algorithm the TSM reports, so the caller can compare the two. On entry
+// *pDigestSize is the capacity of each digest buffer; on return it holds the
+// digest size actually used (32, 48 or 64). Both buffers must hold
+// *pDigestSize bytes.
+//
+NV_STATUS osReadDeviceCertDigests(OBJGPU     *pGpu,
+                                  const NvU8 *pCertChain,
+                                  NvU32       certChainSize,
+                                  NvU8       *pTsmDigest,
+                                  NvU8       *pLocalDigest,
+                                  NvU32      *pDigestSize);
+
 NV_STATUS osTegraSocPowerManagement(OS_GPU_INFO *pOsGpuInfo,
                                     NvBool bInPMTransition,
                                     NvU32 newPMLevel);
@@ -660,6 +693,13 @@ NV_STATUS osGetSystemTime(NvU32 *pSec,NvU32 *puSec);
 NvU64 osGetMonotonicTimeNs(void);
 NvU64 osGetTimestamp(void);
 NvU64 osGetTimestampFreq(void);
+
+#ifndef NSEC_PER_SEC
+#define NSEC_PER_SEC 1000000000ULL
+#endif
+#ifndef NSEC_PER_MSEC
+#define NSEC_PER_MSEC 1000000ULL
+#endif
 
 NV_STATUS osDeferredIsr(OBJGPU *pGpu);
 
@@ -719,6 +759,7 @@ void osUnrefGpuAccessNeeded(OS_GPU_INFO *pOsGpuInfo);
 NV_STATUS osRefGpuAccessNeeded(OS_GPU_INFO *pOsGpuInfo);
 
 NvU32 osGetGridCspSupport(void);
+NvBool osReadAdminProfilingRegkey(OBJGPU *pGpu, NvU32 *pData32);
 
 NV_STATUS osIovaMap(PIOVAMAPPING pIovaMapping);
 void osIovaUnmap(PIOVAMAPPING pIovaMapping);
@@ -738,6 +779,14 @@ NV_STATUS osGetEgmInfo(OBJGPU *pGpu,
                        NvU64  *pPhysAddr,
                        NvU64  *pSize,
                        NvS32  *pNodeId);
+NV_STATUS osInitSysmemWindowForFabricAccess(OBJGPU *pGpu,
+                                            NvU64   alignment,
+                                            NvU64  *pDmaAddr,
+                                            NvU64  *pDmaSize,
+                                            NvBool *pbDmaIdentity);
+void  osDestroySysmemWindowForFabricAccess(OBJGPU *pGpu,
+                                           NvU64   dmaAddr,
+                                           NvU64   dmaSize);
 NV_STATUS osGetForcedNVLinkConnection(OBJGPU *pGpu,
                                       NvU32   maxLinks,
                                       NvU32   *pLinkConnection);
@@ -787,12 +836,20 @@ NV_STATUS osUnmapViewFromSection(OS_GPU_INFO  *pArg1,
                                  void *pAddress,
                                  NvBool bIommuEnabled);
 
-NV_STATUS osOpenTemporaryFile(void **ppFile);
+NV_STATUS osAllocateTemporaryFile(void **ppFile, NvU64 size);
 void osCloseFile(void *pFile);
 NV_STATUS osWriteToFile(void *pFile, NvU8  *buffer,
                         NvU64 size, NvU64 offset);
 NV_STATUS osReadFromFile(void *pFile, NvU8 *buffer,
                          NvU64 size, NvU64 offset);
+
+typedef void *OS_FILE_HANDLE;
+
+NV_STATUS osBindataOpenFile(const char *pFilePath, OS_FILE_HANDLE *pFileHandle);
+void osBindataCloseFile(OS_FILE_HANDLE fileHandle);
+NV_STATUS osBindataGetFileSize(OS_FILE_HANDLE fileHandle, NvU32 *pFileSize);
+NV_STATUS osBindataReadFile(OS_FILE_HANDLE fileHandle, NvU8 *pBuffer,
+                            NvU32 bufferSize, NvU32 *pBytesRead);
 
 NV_STATUS osSrPinSysmem(OS_GPU_INFO  *pArg1,
                         NvU64 commitSize,
@@ -857,7 +914,7 @@ NV_STATUS osTegraSocParseFixedModeTimings(OS_GPU_INFO *pOsGpuInfo,
                                           NV0073_CTRL_DFP_GET_FIXED_MODE_TIMING_PARAMS *pTimingsPerStream,
                                           NvU8 *pNumTimings);
 
-NV_STATUS osTegraiGpuPerfBoost(OBJGPU *pGpu, NvBool enable, NvU32 duration);
+NV_STATUS osTegraiGpuPerfBoost(OBJGPU *pGpu, NvBool enable, NvU32 duration, int boost_type);
 
 #define OS_MAJ_IS_WIN10         10  // wddm2 based windows version
 #define OS_MAJ_IS_VISTA         6   // wddm based windows version
@@ -896,9 +953,12 @@ NV_STATUS osGetVersion(NvU32 *pMajorVer,
 NV_STATUS osGetIsOpenRM(NvBool *bOpenRm);
 
 NvBool osIsBifResetSupported(OS_GPU_INFO *pOsGpuInfo);
+/* Temporary alias. Will be removed when init-on-probe becomes the default in the future. */
+#define osIsInitOnProbeEnabled(x) (!osIsBifResetSupported(x))
 
-// Temporary alias until legacy persistence mode is removed
-#define osIsLegacyPersistenceModeSupported(x) osIsBifResetSupported(x)
+/* Backward-compatibility tracking for legacy persistence mode under init-on-probe */
+void osSetCachedPersistenceMode(OS_GPU_INFO *pOsGpuInfo, NvBool bEnable);
+NvBool osGetCachedPersistenceMode(OS_GPU_INFO *pOsGpuInfo);
 
 NvBool osGrService(OS_GPU_INFO *pOsGpuInfo, NvU32 grIdx, NvU32 intr, NvU32 nstatus, NvU32 addr, NvU32 dataLo);
 
@@ -988,6 +1048,8 @@ NV_STATUS osDestroyNanoTimer(OS_GPU_INFO *pArg1,
 
 NV_STATUS osGetValidWindowHeadMask(OS_GPU_INFO *pArg1,
                                    NvU64 *pWindowHeadMask);
+
+NV_STATUS osGetSorLanePolarityEnableStatus(OS_GPU_INFO *pArg1);
 
 NV_STATUS osSchedule(void);
 
@@ -1093,14 +1155,16 @@ void osInitOSHwInfo(OBJGPU *pGpu);
 
 void osDestroyOSHwInfo(OBJGPU *pGpu);
 
-NV_STATUS osUserHandleToKernelPtr(NvU32 hClient,
-                                  NvP64 Handle,
-                                  NvP64 *pHandle);
+NV_STATUS osGetAndRefEventFromUserHandle(NvU32 hClient,
+                                         NvP64 Handle,
+                                         NvP64 *pHandle);
 
 NV_STATUS osGetSmbiosTable(void **pBaseVAddr, NvU64 *pLength,
                            NvU64 *pNumSubTypes, NvU32 *pVersion);
 
 void osPutSmbiosTable(void *pBaseVAddr, NvU64 length);
+
+NvBool osIsRunningInsideVM(void);
 
 NvBool osIsNvswitchPresent(void);
 
@@ -1212,6 +1276,8 @@ static NV_INLINE NV_STATUS isrWrapper(NvBool testIntr, OBJGPU *pGpu)
 #define OS_PCIE_CAP_MASK_REQ_ATOMICS_64    NVBIT(1)
 #define OS_PCIE_CAP_MASK_REQ_ATOMICS_128   NVBIT(2)
 
+NvU64 osGetReclaimableMemoryUsage(void);
+
 void osGetNumaMemoryUsage(NvS32 numaId, NvU64 *free_memory_bytes, NvU64 *total_memory_bytes);
 
 NV_STATUS osNumaAddGpuMemory(OS_GPU_INFO *pOsGpuInfo, NvU64 offset,
@@ -1314,6 +1380,7 @@ extern void osInitObjOS(struct OBJOS *);
 #define NV_SIM_MODE_CMODEL              2U
 #define NV_SIM_MODE_MODS_AMODEL         3U
 #define NV_SIM_MODE_TEGRA_FPGA          4U
+#define NV_SIM_MODE_VGPU_SIM            5U
 #define NV_SIM_MODE_INVALID         (~0x0U)
 #endif
 
@@ -1348,15 +1415,15 @@ extern void osInitObjOS(struct OBJOS *);
 #pragma once
 #include "os_custom.h"
 
-#define NV_SEMA_RELEASE_SUCCEED         0   // lock released, no waiting thread to notify
-#define NV_SEMA_RELEASE_FAILED          1   // failed to lock release
-#define NV_SEMA_RELEASE_NOTIFIED        2   // lock released, notify waiting thread
-#define NV_SEMA_RELEASE_DPC_QUEUED      3   // lock released, queue DPC to notify waiting thread
-#define NV_SEMA_RELEASE_DPC_FAILED      4   // lock released, but failed to queue a DPC to notify waiting thread
-
     #define ADD_PROBE(pGpu, probeId)
 
 #define IS_SIM_MODS(pOS)            (pOS->bIsSimMods)
+
+struct nv_gpu_op_event;
+typedef struct nv_gpu_op_event nv_gpu_op_event_t;
+
+NV_STATUS osEmitTracepointGpuOpEvent(OBJGPU                   *pGpu,
+                                     const nv_gpu_op_event_t  *pEvent);
 
 #endif // _OS_H_
 

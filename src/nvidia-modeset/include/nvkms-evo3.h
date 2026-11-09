@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -42,9 +42,17 @@
      (1 << NVKMS_COMPOSITION_BLENDING_MODE_NON_PREMULT_SURFACE_ALPHA) | \
      (1 << NVKMS_COMPOSITION_BLENDING_MODE_PREMULT_SURFACE_ALPHA))
 
-#define NV_EVO3_DEFAULT_WINDOW_USAGE_BOUNDS_C5                                     \
-    (DRF_DEF(C57D, _WINDOW_SET_WINDOW_USAGE_BOUNDS, _ILUT_ALLOWED, _TRUE)        | \
-     DRF_DEF(C57D, _WINDOW_SET_WINDOW_USAGE_BOUNDS, _TMO_LUT_ALLOWED, _TRUE))
+static inline NvU32
+nvEvoGetDefaultWindowUsageBoundsC5(const NVDevEvoRec *pDevEvo, NvU32 win)
+{
+    NvU32 bounds = DRF_DEF(C57D, _WINDOW_SET_WINDOW_USAGE_BOUNDS,
+                           _ILUT_ALLOWED, _TRUE);
+    if (pDevEvo->capabilities.window[win].tmoPresent) {
+        bounds |= DRF_DEF(C57D, _WINDOW_SET_WINDOW_USAGE_BOUNDS,
+                          _TMO_LUT_ALLOWED, _TRUE);
+    }
+    return bounds;
+}
 
 // HW supports ratio = 1, 2 (downscaling), 4 (downscaling)
 #define NUM_SCALER_RATIOS 3
@@ -66,7 +74,7 @@ struct EvoClampRangeC5 {
 };
 
 typedef void (NVEvoParseCapabilityNotifierFunc3)(NVDevEvoPtr pDevEvo,
-    NVEvoSubDevPtr pEvoSubDev, volatile const NvU32 *pCaps);
+                                                 volatile const NvU32 *pCaps);
 
 typedef NvU32 (NVEvoHwFormatFromKmsFormatFunc3)(
                    const enum NvKmsSurfaceMemoryFormat format);
@@ -140,7 +148,6 @@ NvBool nvEvoGetCapabilities3(NVDevEvoPtr pDevEvo,
                              NvU32 hwclass, size_t length);
 
 void nvEvoParseCapabilityNotifier6(NVDevEvoPtr pDevEvo,
-                                   NVEvoSubDevPtr pEvoSubDev,
                                    volatile const NvU32 *pCaps);
 
 NvU32 nvHwFormatFromKmsFormatC6(const enum NvKmsSurfaceMemoryFormat format);
@@ -285,7 +292,7 @@ nvEvoGetWindowScalingCapsC3(const NVDevEvoRec *pDevEvo)
      * The mapping in this function can be updated if/when precomp scaling
      * support is extended to other display architectures.
      */
-    return &pDevEvo->gpus[0].capabilities.window[0].scalerCaps;
+    return &pDevEvo->capabilities.window[0].scalerCaps;
 }
 
 static inline NvU32 nvGetMaxPixelsFetchedPerLine(NvU16 inWidth,
@@ -310,18 +317,19 @@ static inline NvU32 nvGetMaxPixelsFetchedPerLine(NvU16 inWidth,
 
 void nvEvoSendHdmiInfoFrameC8(const NVDispEvoRec *pDispEvo,
                               const NvU32 head,
-                              const NvEvoInfoFrameTransmitControl transmitCtrl,
+                              const NvEvoInfoFrameTransmitControl *transmitCtrl,
                               const NVT_INFOFRAME_HEADER *pInfoFrameHeader,
                               const NvU32 infoFrameSize,
                               NvBool needChecksum);
 
 void nvEvoDisableHdmiInfoFrameC8(const NVDispEvoRec *pDispEvo,
                                  const NvU32 head,
+                                 const NvEvoInfoFrameTransmitControl *transmitCtrl,
                                  const NvU8 nvtInfoFrameType);
 
 void nvEvoSendDpInfoFrameSdpC8(const NVDispEvoRec *pDispEvo,
                                const NvU32 head,
-                               const NvEvoInfoFrameTransmitControl transmitCtrl,
+                               const NvEvoInfoFrameTransmitControl *transmitCtrl,
                                const DPSDP_DESCRIPTOR *sdp);
 
 void nvEvoDisableAdaptiveSyncSdpC8(const NVDispEvoRec *pDispEvo,

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2013-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2013-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -358,8 +358,8 @@ struct gpuChannel
     NvU64                        clientRegionGpuAddr;
 };
 
-// Add 3 to include local ctx buffer, patch context buffer and PM ctxsw buffer
-ct_assert(UVM_GPU_CHANNEL_MAX_RESOURCES >= (GR_GLOBALCTX_BUFFER_COUNT + 3));
+// Add 4 to include local ctx buffer, patch context buffer, PM ctxsw buffer, and GTA work queue
+ct_assert(UVM_GPU_CHANNEL_MAX_RESOURCES >= (GR_BUFFER_COUNT));
 
 // A retained channel is a user client's channel which has been registered with
 // the UVM driver.
@@ -424,7 +424,7 @@ struct systemP2PCaps
     NvU32 optimalNvlinkWriteCEs[2];
 };
 
-static NV_STATUS findUvmAddressSpace(NvHandle hClient, NvU32 gpuInstance, NvHandle *pHandle, OBJVASPACE **ppVaspace);
+static NV_STATUS findUvmAddressSpace(NvHandle hClient, OBJGPU *pGpu, NvHandle *pHandle, OBJVASPACE **ppVaspace);
 static NV_STATUS nvGpuOpsGpuMalloc(struct gpuAddressSpace *vaSpace,
                                    NvBool isSystemMemory,
                                    NvLength length,
@@ -888,6 +888,40 @@ NV_STATUS nvGpuOpsCreateSession(struct gpuSession **session)
     gpuSession->devicesLock = portSyncRwLockCreate(pAlloc);
     gpuSession->p2pInfoLock = portSyncRwLockCreate(pAlloc);
     *session = (gpuSession);
+    return status;
+}
+
+NV_STATUS nvGpuOpsIsTdispEnabled(NvBool *pTdispEnabled)
+{
+    NV_STATUS status;
+    nvGpuOpsLockSet acquiredLocks;
+    THREAD_STATE_NODE threadState;
+
+    NV_ASSERT_OR_RETURN(pTdispEnabled != NULL, NV_ERR_INVALID_ARGUMENT);
+
+    *pTdispEnabled = NV_FALSE;
+
+    threadStateInit(&threadState, THREAD_STATE_FLAGS_NONE);
+    status = _nvGpuOpsLocksAcquireAll(RMAPI_LOCK_FLAGS_READ,
+                                      NV01_NULL_OBJECT,
+                                      NULL,
+                                      &acquiredLocks);
+    if (status != NV_OK)
+        goto done;
+
+    {
+        OBJGPUMGR *pGpuMgr = SYS_GET_GPUMGR(SYS_GET_INSTANCE());
+
+        NV_ASSERT_OR_RETURN(pGpuMgr != NULL, NV_ERR_INVALID_STATE);
+
+        *pTdispEnabled = pGpuMgr->ccCaps.bTdispFeatureCapable &&
+                         pGpuMgr->ccCaps.bTdispFeatureEnabled;
+    }
+
+    _nvGpuOpsLocksRelease(&acquiredLocks);
+
+done:
+    threadStateFree(&threadState, THREAD_STATE_FLAGS_NONE);
     return status;
 }
 
@@ -1933,7 +1967,10 @@ static NV_STATUS nvGpuOpsRmSubDeviceCreate(struct gpuDevice *device)
 
     rmSubDevice = portMemAllocNonPaged(sizeof(*rmSubDevice));
     if (rmSubDevice == NULL)
-       return NV_ERR_INSUFFICIENT_RESOURCES;
+    {
+        status = NV_ERR_INSUFFICIENT_RESOURCES;
+        goto cleanup_locks;
+    }
 
     portMemSet(rmSubDevice, 0, sizeof(*rmSubDevice));
 
@@ -1966,6 +2003,7 @@ cleanup_subdevice:
     pRmApi->Free(pRmApi, session->handle, device->subhandle);
 cleanup_subdevice_desc:
     portMemFree(rmSubDevice);
+cleanup_locks:
     portSyncRwLockReleaseWrite(rmDevice->btreeLock);
     portSyncRwLockReleaseRead(session->devicesLock);
     return status;
@@ -2000,6 +2038,12 @@ static NvBool isDeviceHopperPlus(const struct gpuDevice *device)
 {
     NV_ASSERT(device->rmDevice);
     return (device->rmDevice->arch >= GPU_ARCHITECTURE_HOPPER) && (device->rmDevice->arch != GPU_ARCHITECTURE_ADA);
+}
+
+static NvBool isDeviceBlackwellPlus(const struct gpuDevice *device)
+{
+    NV_ASSERT(device->rmDevice);
+    return device->rmDevice->arch >= GPU_ARCHITECTURE_BLACKWELL_GB1XX;
 }
 
 static UVM_LINK_TYPE rmControlToUvmNvlinkVersion(NvU32 nvlinkVersion)
@@ -2637,8 +2681,11 @@ NV_STATUS nvGpuOpsAddressSpaceCreate(struct gpuDevice *device,
     vaParams.flags  = gpuVaSpace->vaSize ?
                       NV_VASPACE_ALLOCATION_FLAGS_SHARED_MANAGEMENT :
                       NV_VASPACE_ALLOCATION_FLAGS_NONE;
-    if (enableAts) {
-        NV_ASSERT_OR_RETURN(vaParams.flags != NV_VASPACE_ALLOCATION_FLAGS_NONE, NV_ERR_INVALID_ARGUMENT);
+    if (enableAts)
+    {
+        NV_ASSERT_TRUE_OR_GOTO(status,
+            vaParams.flags != NV_VASPACE_ALLOCATION_FLAGS_NONE,
+            NV_ERR_INVALID_ARGUMENT, cleanup_struct);
         vaParams.flags |= NV_VASPACE_ALLOCATION_FLAGS_ENABLE_NVLINK_ATS;
     }
 
@@ -2661,7 +2708,7 @@ NV_STATUS nvGpuOpsAddressSpaceCreate(struct gpuDevice *device,
                             sizeof(vaParams));
     if (status != NV_OK)
     {
-        goto cleanup_struct;
+        goto cleanup_vaspace;
     }
 
     // If base & Size were not provided before, they would have been filled now
@@ -2711,32 +2758,64 @@ NV_STATUS nvGpuOpsDupAddressSpace(struct gpuDevice *device,
 
     // TODO - Move this check to RMDupObject later.
     // Find the device associated with the hUserVASpace and verify that the UUID belongs to it.
-    // TODO: Acquired because serverutilGetResourceRef expects RMAPI lock. Necessary?
-    status = rmapiLockAcquire(RMAPI_LOCK_FLAGS_READ, RM_LOCK_MODULES_GPU_OPS);
-    if (status != NV_OK)
-        return status;
-    status = serverutilGetResourceRef(hUserClient, hUserVASpace, &pVaSpaceRef);
-    rmapiLockRelease();
-    if (status != NV_OK)
-        return status;
+    {
+        NvU32        deviceInst = 0;
+        CLIENT_ENTRY *pClientEntry = NULL;
 
-    if (!dynamicCast(pVaSpaceRef->pResource, VaSpaceApi))
-        return NV_ERR_INVALID_OBJECT;
+        //
+        // Hold the RM API lock and the per-client lock across the lookup and
+        // all subsequent dereferences of the returned RsResourceRef pointer.
+        // Copy out the values needed before releasing both locks.
+        //
+        status = rmapiLockAcquire(RMAPI_LOCK_FLAGS_READ, RM_LOCK_MODULES_GPU_OPS);
+        if (status != NV_OK)
+            return status;
 
-    // The parent must be valid and a device if this is a VA space handle
-    // TODO: Acquired because serverutilGetResourceRef expects RMAPI lock. Necessary?
-    status = rmapiLockAcquire(RMAPI_LOCK_FLAGS_READ, RM_LOCK_MODULES_GPU_OPS);
-    if (status != NV_OK)
-        return status;
-    status = serverutilGetResourceRef(hUserClient, pVaSpaceRef->pParentRef->hResource, &pDeviceRef);
-    rmapiLockRelease();
-    NV_ASSERT(status == NV_OK);
+        status = serverAcquireClient(&g_resServ, hUserClient, LOCK_ACCESS_WRITE, &pClientEntry);
+        if (status != NV_OK)
+        {
+            // serverAcquireClient returns NV_ERR_INVALID_OBJECT_HANDLE for an
+            // unknown client handle; normalize to NV_ERR_INVALID_CLIENT so
+            // callers see a consistent error for a bad hUserClient.
+            status = NV_ERR_INVALID_CLIENT;
+            goto done_release_api_lock;
+        }
 
-    pDevice = dynamicCast(pDeviceRef->pResource, Device);
-    NV_ASSERT(pDevice != NULL);
+        status = serverutilGetResourceRef(hUserClient, hUserVASpace, &pVaSpaceRef);
+        if (status != NV_OK)
+            goto done_release_locks;
 
-    if (pDevice->deviceInst != device->deviceInstance)
-        return NV_ERR_OTHER_DEVICE_FOUND;
+        if (!dynamicCast(pVaSpaceRef->pResource, VaSpaceApi))
+        {
+            status = NV_ERR_INVALID_OBJECT;
+            goto done_release_locks;
+        }
+
+        // The parent must be valid and a device if this is a VA space handle
+        status = serverutilGetResourceRef(hUserClient, pVaSpaceRef->pParentRef->hResource, &pDeviceRef);
+        if (status != NV_OK)
+            goto done_release_locks;
+
+        pDevice = dynamicCast(pDeviceRef->pResource, Device);
+        if (pDevice == NULL)
+        {
+            status = NV_ERR_INVALID_OBJECT;
+            goto done_release_locks;
+        }
+
+        deviceInst = pDevice->deviceInst;
+
+done_release_locks:
+        serverReleaseClient(&g_resServ, LOCK_ACCESS_WRITE, pClientEntry);
+done_release_api_lock:
+        rmapiLockRelease();
+
+        if (status != NV_OK)
+            return status;
+
+        if (deviceInst != device->deviceInstance)
+            return NV_ERR_OTHER_DEVICE_FOUND;
+    }
 
     gpuVaSpace = portMemAllocNonPaged(sizeof(*gpuVaSpace));
     if (gpuVaSpace == NULL)
@@ -3975,7 +4054,6 @@ nvGpuOpsBuildExternalAllocPtes
 )
 {
     NV_STATUS               status              = NV_OK;
-    OBJGVASPACE            *pGVAS               = NULL;
     const GMMU_FMT         *pFmt                = NULL;
     const GMMU_FMT_PTE     *pPteFmt             = NULL;
     const MMU_FMT_LEVEL    *pLevelFmt           = NULL;
@@ -4044,10 +4122,8 @@ nvGpuOpsBuildExternalAllocPtes
     if ((offset & (mappingPageSize - 1)) != 0)
         return NV_ERR_INVALID_ARGUMENT;
 
-    pGVAS = dynamicCast(pVAS, OBJGVASPACE);
-
     // Get the GMMU format
-    pFmt = gvaspaceGetGmmuFmt(pGVAS, pMappingGpu);
+    pFmt = vaspaceGetGmmuFmt(pVAS, pMappingGpu);
     pPteFmt = (GMMU_FMT_PTE*)pFmt->pPte;
     pLevelFmt = mmuFmtFindLevelWithPageShift(pFmt->pRoot, BIT_IDX_64(mappingPageSize));
 
@@ -4667,6 +4743,7 @@ NV_STATUS nvGpuOpsGetExternalAllocPtesOrPhysAddrs(struct gpuAddressSpace *vaSpac
     NvBool isPeerSupported = NV_FALSE;
     NvBool isIndirectPeerSupported = NV_FALSE;
     NvBool isBar1P2PSupported = NV_FALSE;
+    RMRES_MEM_INTER_MAP_PARAMS memInterMapParams = {0};
     OBJVASPACE *pVAS = NULL;
     OBJGPU    *pPeerGpu = NULL;
     RsClient  *pClient;
@@ -4706,26 +4783,24 @@ NV_STATUS nvGpuOpsGetExternalAllocPtesOrPhysAddrs(struct gpuAddressSpace *vaSpac
     if (status != NV_OK)
         goto done;
 
-    // RM client allocations can't have multiple subDevice memdescs.
-    pMemDesc = pMemory->pMemDesc;
-    NV_ASSERT(!memdescHasSubDeviceMemDescs(pMemDesc));
-
-    // Do not support mapping on anything other than sysmem/vidmem/fabric!
-    if ((memdescGetAddressSpace(pMemDesc) != ADDR_SYSMEM) &&
-        (memdescGetAddressSpace(pMemDesc) != ADDR_FBMEM)  &&
-        (memdescGetAddressSpace(pMemDesc) != ADDR_FABRIC_MC) &&
-        (memdescGetAddressSpace(pMemDesc) != ADDR_FABRIC_V2))
-    {
-        status = NV_ERR_NOT_SUPPORTED;
-        goto done;
-    }
-
     status = CliSetGpuContext(vaSpace->device->session->handle,
                               vaSpace->device->handle,
                               &pMappingGpu,
                               NULL);
+
     if (status != NV_OK)
         goto done;
+
+    // Call interMapParams to get actual backing memdesc
+    memInterMapParams.pGpu = pMappingGpu;
+    memInterMapParams.pMemoryRef = RES_GET_REF(pMemory);
+    memInterMapParams.bSubdeviceHandleProvided = NV_FALSE;
+    NV_ASSERT_OK_OR_GOTO(status, rmresGetMemInterMapParams(dynamicCast(pMemory, RmResource), &memInterMapParams), done);
+
+    status = NV_ERR_INVALID_STATE;
+    pMemDesc = memInterMapParams.pSrcMemDesc;
+    NV_ASSERT_OR_GOTO(pMemDesc != NULL, done);
+    status = NV_OK;
 
     pAdjustedMemDesc = pMemDesc;
     pFabricVAS       = dynamicCast(pMappingGpu->pFabricVAS, FABRIC_VASPACE);
@@ -5850,7 +5925,6 @@ static NV_STATUS channelAllocate(const gpuTsgHandle tsg,
     OBJGPU *pGpu = NULL;
     KernelFifo *pKernelFifo = NULL;
     NvU32 pid = osGetCurrentProcess();
-    NvU32 subdeviceInstance;
     UVM_BUFFER_LOCATION gpFifoLoc;
     UVM_BUFFER_LOCATION gpPutLoc;
     NvLength gpFifoSize, errorNotifierSize;
@@ -5909,8 +5983,6 @@ static NV_STATUS channelAllocate(const gpuTsgHandle tsg,
 
     portMemSet(pAllocInfo, 0, sizeof(*pAllocInfo));
 
-    subdeviceInstance = gpumgrGetSubDeviceInstanceFromGpu(pGpu);
-
     channel = portMemAllocNonPaged(sizeof(*channel));
     if (channel == NULL)
     {
@@ -5930,13 +6002,12 @@ static NV_STATUS channelAllocate(const gpuTsgHandle tsg,
     // If the allocation is vidmem ask RM to allocate persistent vidmem
     pAllocInfo->gpuAllocInfo.bPersistentVidmem = NV_TRUE;
 
-    if (gpuIsCCorApmFeatureEnabled(pGpu))
+    if (gpuIsCCFeatureEnabled(pGpu))
     {
         // Gpfifo can be placed in one of the following locations
-        // 1. Unprotected sysmem in case of both APM and HCC
-        // 2. Unprotected vidmem in case of APM
-        // 3. Protected vidmem in case of HCC
-        if ((gpFifoLoc == UVM_BUFFER_LOCATION_SYS) || gpuIsApmFeatureEnabled(pGpu))
+        // 1. Unprotected sysmem in case of HCC
+        // 2. Protected vidmem in case of HCC
+        if (gpFifoLoc == UVM_BUFFER_LOCATION_SYS)
         {
             pAllocInfo->gpuAllocInfo.bUnprotected = NV_TRUE;
         }
@@ -5979,7 +6050,7 @@ static NV_STATUS channelAllocate(const gpuTsgHandle tsg,
     // sufficiently large to also accommodate any other channel
     // notifiers, and request a kernel VA and CPU caching.
     //
-    if (gpuIsCCorApmFeatureEnabled(pGpu))
+    if (gpuIsCCFeatureEnabled(pGpu))
     {
         // Put notifier in unprotected sysmem
         pAllocInfo->gpuAllocInfo.bUnprotected = NV_TRUE;
@@ -6018,7 +6089,6 @@ static NV_STATUS channelAllocate(const gpuTsgHandle tsg,
                               device->handle,
                               hErrorNotifier,
                               channel->errorNotifierOffset,
-                              gpumgrGetDeviceGpuMask(device->deviceInstance),
                               &pDmaMappingInfo))
     {
         _nvGpuOpsLocksRelease(&acquiredLocks);
@@ -6032,7 +6102,7 @@ static NV_STATUS channelAllocate(const gpuTsgHandle tsg,
     // RM uses the parent subdevice index to fill the notifier on SYSMEM. So use the same.
     // NOTE: the same assumption does not hold for VIDMEM allocations.
     //
-    channel->errorNotifier = (NvNotification*)pDmaMappingInfo->KernelVAddr[subdeviceInstance];
+    channel->errorNotifier = (NvNotification*)pDmaMappingInfo->KernelVAddr;
     if (!channel->errorNotifier)
     {
         status = NV_ERR_GENERIC;
@@ -6053,7 +6123,7 @@ static NV_STATUS channelAllocate(const gpuTsgHandle tsg,
 
     if (isDeviceVoltaPlus(device))
     {
-        if (gpuIsCCorApmFeatureEnabled(pGpu))
+        if (gpuIsCCFeatureEnabled(pGpu))
         {
             // All channels are allocated as secure when the Confidential
             // Computing feature is enabled.
@@ -6061,10 +6131,9 @@ static NV_STATUS channelAllocate(const gpuTsgHandle tsg,
                                                               pAllocInfo->gpFifoAllocParams.flags);
 
             // USERD can be placed in one of the following locations
-            // 1. Unprotected sysmem in case of both APM and HCC
-            // 2. Unprotected vidmem in case of APM
-            // 3. Protected vidmem in case of HCC
-            if ((gpPutLoc == UVM_BUFFER_LOCATION_SYS) || gpuIsApmFeatureEnabled(pGpu))
+            // 1. Unprotected sysmem in case of  HCC
+            // 2. Protected vidmem in case of HCC
+            if (gpPutLoc == UVM_BUFFER_LOCATION_SYS)
             {
                 pAllocInfo->gpuAllocInfo.bUnprotected = NV_TRUE;
             }
@@ -6086,10 +6155,8 @@ static NV_STATUS channelAllocate(const gpuTsgHandle tsg,
 
         channel->hUserdPhysHandle = pAllocInfo->gpuAllocInfo.hPhysHandle;
 
-        SLI_LOOP_START(SLI_LOOP_FLAGS_BC_ONLY)
         pAllocInfo->gpFifoAllocParams.hUserdMemory[gpumgrGetSubDeviceInstanceFromGpu(pGpu)] = channel->hUserdPhysHandle;
         pAllocInfo->gpFifoAllocParams.userdOffset[gpumgrGetSubDeviceInstanceFromGpu(pGpu)] = 0;
-        SLI_LOOP_END
 
         // Skip this whenever HCC is enabled and USERD is in vidmem. CPU access
         // to vidmem is blocked in that scenario.
@@ -6857,10 +6924,10 @@ static NV_STATUS _convertSystemFabricStateToErrorCode
 
 static NV_STATUS _convertGpuFabricProbeStateToErrorCode
 (
-    NV2080_CTRL_CMD_GET_GPU_FABRIC_PROBE_INFO_PARAMS fabricProbeParams
+    NV2080_CTRL_CMD_GET_GPU_FABRIC_PROBE_INFO_PARAMS *pFabricProbeParams
 )
 {
-    switch (fabricProbeParams.state)
+    switch (pFabricProbeParams->state)
     {
         case NV2080_CTRL_GPU_FABRIC_PROBE_STATE_UNSUPPORTED:
         case NV2080_CTRL_GPU_FABRIC_PROBE_STATE_COMPLETE:
@@ -6899,7 +6966,7 @@ static NV_STATUS _gpuGetFabricStatus
                                                &fabricProbeParams,
                                                sizeof(fabricProbeParams)));
 
-        return _convertGpuFabricProbeStateToErrorCode(fabricProbeParams);
+        return _convertGpuFabricProbeStateToErrorCode(&fabricProbeParams);
     }
     else
     {
@@ -6921,8 +6988,7 @@ NV_STATUS nvGpuOpsQueryCaps(struct gpuDevice *device, gpuCaps *caps)
     NV_STATUS status;
     nvGpuOpsLockSet acquiredLocks;
     THREAD_STATE_NODE threadState;
-    NV0000_CTRL_GPU_GET_ID_INFO_V2_PARAMS infoParams = {0};
-    struct gpuSession *session = device->session;
+    NV2080_CTRL_FB_GET_INFO_V2_PARAMS fbInfoParams = {0};
     RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
 
     threadStateInit(&threadState, THREAD_STATE_FLAGS_NONE);
@@ -6933,20 +6999,22 @@ NV_STATUS nvGpuOpsQueryCaps(struct gpuDevice *device, gpuCaps *caps)
         return status;
     }
 
-    infoParams.gpuId = device->gpuId;
+    fbInfoParams.fbInfoList[0].index = NV2080_CTRL_FB_INFO_INDEX_NUMA_NODE_ID;
+    fbInfoParams.fbInfoListSize = 1;
+
     status = pRmApi->Control(pRmApi,
-                             session->handle,
-                             session->handle,
-                             NV0000_CTRL_CMD_GPU_GET_ID_INFO_V2,
-                             &infoParams,
-                             sizeof(infoParams));
+                             device->session->handle,
+                             device->subhandle,
+                             NV2080_CTRL_CMD_FB_GET_INFO_V2,
+                             &fbInfoParams,
+                             sizeof(fbInfoParams));
     if (status != NV_OK)
         goto cleanup;
 
-    if (infoParams.numaId != NV0000_CTRL_NO_NUMA_NODE)
+    if (fbInfoParams.fbInfoList[0].data != (NvU32) NV0000_CTRL_NO_NUMA_NODE)
     {
         caps->numaEnabled = NV_TRUE;
-        caps->numaNodeId = infoParams.numaId;
+        caps->numaNodeId = fbInfoParams.fbInfoList[0].data;
     }
 
     status = _gpuGetFabricStatus(device, pRmApi);
@@ -7033,7 +7101,7 @@ static NV_STATUS findVaspaceFromPid(unsigned pid, unsigned gpuId,
                 // this client for this device to find the first
                 // vaspace that is tagged as UVM.
                 //
-                if (findUvmAddressSpace(*hClient, pGpu->gpuInstance, hVaSpace, &pVAS) == NV_OK)
+                if (findUvmAddressSpace(*hClient, pGpu, hVaSpace, &pVAS) == NV_OK)
                 {
                     return NV_OK;
                 }
@@ -7047,11 +7115,10 @@ static NV_STATUS findVaspaceFromPid(unsigned pid, unsigned gpuId,
 // This function will look through all the vaspaces under a client for a device and return
 // the one that is tagged as UVM, or NULL if there is no UVM vaspace.
 //
-static NV_STATUS findUvmAddressSpace(NvHandle hClient, NvU32 gpuInstance, NvHandle *phVaSpace, OBJVASPACE **ppVASpace)
+static NV_STATUS findUvmAddressSpace(NvHandle hClient, OBJGPU *pGpu, NvHandle *phVaSpace, OBJVASPACE **ppVASpace)
 {
     RsResourceRef *pResourceRef;
     RS_ITERATOR    iter;
-    NvU32          gpuMask = NVBIT(gpuInstance);
 
     iter = serverutilRefIter(hClient, NV01_NULL_OBJECT, classId(VaSpaceApi), RS_ITERATE_DESCENDANTS, NV_TRUE);
 
@@ -7063,7 +7130,7 @@ static NV_STATUS findUvmAddressSpace(NvHandle hClient, NvU32 gpuInstance, NvHand
         *phVaSpace = pResourceRef->hResource;
 
         if (vaspaceIsExternallyOwned(*ppVASpace) &&
-            (((*ppVASpace)->gpuMask & gpuMask) == gpuMask))
+            ((*ppVASpace)->pGpu == pGpu))
         {
             return NV_OK;
         }
@@ -7205,17 +7272,16 @@ nvGpuOpsQueryGpuConfidentialComputeCaps(NvHandle hClient,
 
     pGpuConfComputeCaps->bConfComputingEnabled = NV_FALSE;
 
-    if (confComputeParams.ccFeature == NV_CONF_COMPUTE_SYSTEM_FEATURE_APM_ENABLED)
-    {
-        NV_ASSERT_OK_OR_GOTO(status, NV_ERR_NOT_SUPPORTED, cleanup);
-    }
+    pGpuConfComputeCaps->bmsaiEnabled =
+        (confComputeParams.ccFeature == NV_CONF_COMPUTE_SYSTEM_FEATURE_BMSAI_ENABLED);
+
     // Although protected pcie uses the same HW features as HCC, we don't advertise
     // PPCIe as a multi-gpu extension of HCC. This is because PPCIe does not meet
     // the security bar of a full blown HCC solution. For PPCIe, we have traded off
     // security for higher performance. Hence, RM does not report both HCC and PPCIe
     // ON at the same time. Internally however we use the same code paths for HCC and
     // PPCIe.
-    else if (confComputeParams.ccFeature == NV_CONF_COMPUTE_SYSTEM_FEATURE_HCC_ENABLED ||
+    if (confComputeParams.ccFeature == NV_CONF_COMPUTE_SYSTEM_FEATURE_HCC_ENABLED ||
              confComputeParams.multiGpuMode == NV_CONF_COMPUTE_SYSTEM_MULTI_GPU_MODE_PROTECTED_PCIE)
     {
         NV_CONF_COMPUTE_CTRL_CMD_GPU_GET_KEY_ROTATION_STATE_PARAMS keyRotationParams = {0};
@@ -7508,6 +7574,38 @@ static NV_STATUS getSystemMemoryWindow(OBJGPU *pGpu, gpuInfo *pGpuInfo)
         pGpuInfo->systemMemoryWindowStart = 0;
         pGpuInfo->systemMemoryWindowSize = 0;
     }
+
+    return NV_OK;
+}
+
+static NV_STATUS getSysmemFlaInfo(OBJGPU *pGpu, gpuInfo *pGpuInfo)
+{
+    MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
+
+    portMemSet(&pGpuInfo->flaWindowForCpuMemNode, 0,
+               sizeof(pGpuInfo->flaWindowForCpuMemNode));
+
+    if (pMemoryManager == NULL)
+        return NV_OK;
+
+    if (!pMemoryManager->sysmemFlaWindow.bSupported)
+        return NV_OK;
+
+    //
+    // We return UVM the dmaBase and flaBase where the actual sysmem starts.
+    // dmaOffset is the offset within the 256G aligned-down DMA window where
+    // the actual sysmem starts.
+    // Thus, dmaOffset is added to the 256G-aligned flaBase to indicate
+    // start of sysmem.
+    // Similarly, dmaSize is returned as the flaSize since that represents
+    // true sysmem mapping size.
+    //
+    pGpuInfo->flaWindowForCpuMemNode.bSupported      = NV_TRUE;
+    pGpuInfo->flaWindowForCpuMemNode.flaStart        = pMemoryManager->sysmemFlaWindow.flaBase +
+                                                            pMemoryManager->sysmemFlaWindow.dmaOffset;
+    pGpuInfo->flaWindowForCpuMemNode.flaSize         = pMemoryManager->sysmemFlaWindow.dmaSize;
+    pGpuInfo->flaWindowForCpuMemNode.dmaAddrBase     = pMemoryManager->sysmemFlaWindow.dmaBase;
+    pGpuInfo->flaWindowForCpuMemNode.bIdentityDmaMap = pMemoryManager->sysmemFlaWindow.bDmaIdentity;
 
     return NV_OK;
 }
@@ -7838,6 +7936,9 @@ NV_STATUS nvGpuOpsGetGpuInfo(const NvProcessorUuid *pUuid,
 
     pGpuInfo->isSimulated = (simulationInfoParams.type != NV2080_CTRL_GPU_GET_SIMULATION_INFO_TYPE_NONE);
 
+    // Compute GPU has no vidmem, used to detect iGPUs.
+    pGpuInfo->gpuArchIsZeroFb = pGpu->pGpuArch->bGpuArchIsZeroFb;
+
     portMemSet(&pGpuInfo->gpuConfComputeCaps, 0, sizeof(pGpuInfo->gpuConfComputeCaps));
 
     status = nvGpuOpsQueryGpuConfidentialComputeCaps(clientHandle, subDeviceHandle, &pGpuInfo->gpuConfComputeCaps);
@@ -7869,6 +7970,10 @@ NV_STATUS nvGpuOpsGetGpuInfo(const NvProcessorUuid *pUuid,
         goto cleanup;
 
     status = getNonPasidAtsInfo(pGpu, clientHandle, subDeviceHandle, pGpuInfo);
+    if (status != NV_OK)
+        goto cleanup;
+
+    status = getSysmemFlaInfo(pGpu, pGpuInfo);
     if (status != NV_OK)
         goto cleanup;
 
@@ -8368,15 +8473,6 @@ static NV_STATUS dupMemory(struct gpuDevice *device,
             goto done;
     }
 
-    if (memdescGetAddressSpace(pAdjustedMemDesc) != ADDR_FBMEM &&
-        memdescGetAddressSpace(pAdjustedMemDesc) != ADDR_SYSMEM &&
-        memdescGetAddressSpace(pAdjustedMemDesc) != ADDR_FABRIC_MC &&
-        memdescGetAddressSpace(pAdjustedMemDesc) != ADDR_FABRIC_V2)
-    {
-        status = NV_ERR_NOT_SUPPORTED;
-        goto freeGpaMemdesc;
-    }
-
     // For SYSMEM or indirect peer mappings
     // Deviceless memory (NV01_MEMORY_DEVICELESS) can have a NULL pGpu. Perform targeted
     // null checks before IOMMU operations that require valid GPU contexts.
@@ -8460,11 +8556,14 @@ static NV_STATUS dupMemory(struct gpuDevice *device,
     // can be vidmem memdesc if fabric memory is being mapped on the
     // owner GPU. Otherwise, it will break refcounting in
     // nvGpuOpsFreeDupedHandle(), which always uses the original
-    // memdesc.
+    // memdesc. Skip this for MMIO dups.
     //
-    status = _enablePeerAccess(device, memdescGetAddressSpace(pMemDesc));
-    if (status != NV_OK)
-        goto freeDupedMem;
+    if (!memdescGetFlag(pMemDesc, MEMDESC_FLAGS_MAP_SYSCOH_OVER_BAR1))
+    {
+        status = _enablePeerAccess(device, memdescGetAddressSpace(pMemDesc));
+        if (status != NV_OK)
+            goto freeDupedMem;
+    }
 
     *hDupMemory = dupedMemHandle;
 
@@ -8488,6 +8587,7 @@ NV_STATUS nvGpuOpsDupMemory(struct gpuDevice *device,
                             NvHandle *hDupMemory,
                             gpuMemoryInfo *pGpuMemoryInfo)
 {
+
     return dupMemory(device,
                      hClient,
                      hPhysMemory,
@@ -9400,13 +9500,27 @@ NV_STATUS nvGpuOpsInitFaultInfo(struct gpuDevice *device,
     NvHandle  hDevice = device->handle;
     UvmFaultMetadataPacket *bufferMetadata = NULL;
 
-    status = serverGetClientUnderLock(&g_resServ, hClient, &pClient);
+    status = rmapiLockAcquire(RMAPI_LOCK_FLAGS_READ, RM_LOCK_MODULES_GPU_OPS);
     if (status != NV_OK)
         return status;
 
+    status = serverGetClientUnderLock(&g_resServ, hClient, &pClient);
+    if (status != NV_OK)
+    {
+        rmapiLockRelease();
+        return status;
+    }
+
     status = deviceGetByHandle(pClient, hDevice, &pDevice);
     if (status != NV_OK)
+    {
+        rmapiLockRelease();
         return status;
+    }
+
+    pGpu = GPU_RES_GET_GPU(pDevice);
+
+    rmapiLockRelease();
 
     pFaultInfo->pDevice = pDevice;
 
@@ -9420,8 +9534,6 @@ NV_STATUS nvGpuOpsInitFaultInfo(struct gpuDevice *device,
                            sizeof(faultBufferAllocParams));
     if (status != NV_OK)
         goto cleanup;
-
-    pGpu = GPU_RES_GET_GPU(pDevice);
 
     // When Hopper CC is enabled, UVM won't have direct access to the replayable
     // HW fault buffer. Instead, it will be using a shadow fault buffer in
@@ -10081,11 +10193,6 @@ static NV_STATUS nvGpuOpsGetChannelEngineType(OBJGPU *pGpu,
 
 static void _memdescRetain(MEMORY_DESCRIPTOR *pMemDesc)
 {
-    if (pMemDesc->Allocated > 0)
-    {
-        pMemDesc->Allocated++;
-    }
-
     memdescAddRef(pMemDesc);
 }
 
@@ -10114,8 +10221,6 @@ static NV_STATUS nvGpuOpsGetChannelInstanceMemInfo(gpuRetainedChannel *retainedC
                                                    &pMemDesc);
     if (status != NV_OK)
         return status;
-
-    pMemDesc = memdescGetMemDescFromGpu(pMemDesc, retainedChannel->pGpu);
 
     kfifoFillMemInfo(pKernelFifo, pMemDesc, &instanceMemInfo);
 
@@ -10466,6 +10571,43 @@ NV_STATUS nvGpuOpsRetainChannel(struct gpuAddressSpace *vaSpace,
 
     channelInstanceInfo->workSubmissionToken = params.workSubmitToken;
 
+    if (!isDeviceHopperPlus(device) || isDeviceBlackwellPlus(device))
+    {
+        channelInstanceInfo->pWorkSubmissionToken = NULL;
+    }
+    else
+    {
+        MEMORY_DESCRIPTOR *pNotifierMemDesc = pKernelChannel->pErrContextMemDesc;
+        NvNotification *pNotifier = NULL;
+        NvU32 wsTokenIndex = pKernelChannel->notifyIndex[NV_CHANNELGPFIFO_NOTIFICATION_TYPE_WORK_SUBMIT_TOKEN];
+        if (pNotifierMemDesc != NULL)
+            pNotifier = (NvNotification *)memdescGetKernelMapping(pNotifierMemDesc);
+        //
+        // Mirror the guards in kchannelUpdateNotifierMem_IMPL: if the client's
+        // notifier allocation is too small to cover wsTokenIndex, RM never
+        // writes that slot. Handing out a pointer to it here would let UVM read
+        // stale/uninitialized memory as a live token. The CPU pointer is also
+        // only safe to dereference if the notifier is in sysmem, or in vidmem
+        // with BAR access permitted. In either failure case fall back to NULL
+        // so UVM keeps using the cached token.
+        //
+        if ((pNotifier != NULL) &&
+            (memdescGetSize(pNotifierMemDesc) >= ((NvU64)wsTokenIndex + 1) * sizeof(NvNotification)) &&
+            ((memdescGetAddressSpace(pNotifierMemDesc) == ADDR_SYSMEM) ||
+             !kbusIsBarAccessBlocked(GPU_GET_KERNEL_BUS(pGpu))))
+        {
+            channelInstanceInfo->pWorkSubmissionToken =
+                (NvU32 *)((NvU8 *)pNotifier +
+                    (wsTokenIndex * sizeof(NvNotification)) +
+                    NV_OFFSETOF(NvNotification, info32));
+        }
+        else
+        {
+            channelInstanceInfo->pWorkSubmissionToken = NULL;
+        }
+    }
+
+
     // In Turing+ gpus, the CLEAR_FAULTED method requires a RM-provided handle
     // to identify the channel.
     //
@@ -10514,7 +10656,6 @@ NV_STATUS nvGpuOpsRetainChannel(struct gpuAddressSpace *vaSpace,
             // GFID is not required since UVM clears a faulted channel with a SW
             // method on SRIOV. On baremetal, GFID is always zero.
             val = FLD_SET_DRF_NUM(_RUNLIST, _INTERNAL_DOORBELL, _CHID, channel->chId, val);
-            val = FLD_SET_DRF_NUM(_RUNLIST, _INTERNAL_DOORBELL, _GFID, 0, val);
             channelInstanceInfo->workSubmissionToken = val;
         }
     }
@@ -10744,7 +10885,9 @@ _shadowMemdescCreate(gpuRetainedChannel *retainedChannel,
             goto done;
         }
 
-        NV_ASSERT(j + pParams->numPages <= numBufferPages);
+        NV_ASSERT_OR_ELSE(pParams->numPages <= numBufferPages - j,
+                          status = NV_ERR_INVALID_DATA;
+                          goto done;);
 
         if (pCtxBufferInfo->bIsContigous)
         {
@@ -10909,7 +11052,9 @@ static NV_STATUS _nvGpuOpsRetainChannelResources(struct gpuDevice *device,
     if (status != NV_OK)
         goto done;
 
-    NV_ASSERT(pParams->bufferCount <= NV_ARRAY_ELEMENTS(channelInstanceInfo->resourceInfo));
+    NV_ASSERT_OR_ELSE(pParams->bufferCount <= NV_ARRAY_ELEMENTS(channelInstanceInfo->resourceInfo),
+                      status = NV_ERR_INVALID_DATA;
+                      goto done;);
 
     for (i = 0; i < pParams->bufferCount; i++)
     {
@@ -11030,7 +11175,8 @@ NV_STATUS nvGpuOpsGetChannelResourcePtes(struct gpuAddressSpace *vaSpace,
 
     // Do not support mapping on anything other than sysmem/vidmem!
     if ((memdescGetAddressSpace(pMemDesc) != ADDR_SYSMEM) &&
-        (memdescGetAddressSpace(pMemDesc) != ADDR_FBMEM))
+        (memdescGetAddressSpace(pMemDesc) != ADDR_FBMEM) &&
+        (memdescGetAddressSpace(pMemDesc) != ADDR_REGMEM))
     {
         _nvGpuOpsLocksRelease(&acquiredLocks);
         threadStateFree(&threadState, THREAD_STATE_FLAGS_NONE);

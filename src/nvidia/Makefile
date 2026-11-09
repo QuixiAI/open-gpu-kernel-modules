@@ -148,7 +148,14 @@ endif
 # unreachable.
 CFLAGS += -ffunction-sections
 CFLAGS += -fdata-sections
-NV_KERNEL_O_LDFLAGS += --gc-sections
+ifeq ($(NV_KERNEL_TRACING)-$(TARGET_ARCH),1-aarch64)
+  # aarch64 uses -fpatchable-function-entry=4,2 instead of -mrecord-mcount for ftrace.
+  # 4,2 places 2 NOPs before each function entry and 2 at the prologue start,
+  # matching the layout expected by DYNAMIC_FTRACE_WITH_CALL_OPS kernels on aarch64.
+  CFLAGS += -fpatchable-function-entry=4,2
+else
+  NV_KERNEL_O_LDFLAGS += --gc-sections
+endif
 EXPORTS_LINK_COMMAND = exports_link_command.txt
 
 ifeq ($(TARGET_ARCH),x86_64)
@@ -156,6 +163,7 @@ ifeq ($(TARGET_ARCH),x86_64)
   ENDBR_SUPPORTED := $(call AS_HAS_INSTR, endbr64)
 
   FCF_SUPPORTED =
+  FCF_PROTECTION =
 
   #
   # GCC flags -fcf-protection=branch and -mindirect-branch=extern-thunk can
@@ -178,8 +186,15 @@ ifeq ($(TARGET_ARCH),x86_64)
       $(shell $(VERSION_MK_DIR)/nv-compiler.sh version_is_at_least $(CC) 140000)
   endif
 
-  ifeq ($(FCF_SUPPORTED)-$(ENDBR_SUPPORTED)-$(NV_KERNEL_TRACING),1-1-)
-    CONDITIONAL_CFLAGS += $(call TEST_CC_ARG, -fcf-protection=branch)
+  ifeq ($(FCF_SUPPORTED),1)
+    FCF_PROTECTION := return
+
+    ifeq ($(ENDBR_SUPPORTED)-$(NV_KERNEL_TRACING),1-)
+      FCF_PROTECTION := full
+    endif
+  endif
+  ifneq ($(FCF_PROTECTION),)
+    CONDITIONAL_CFLAGS += $(call TEST_CC_ARG, -fcf-protection=$(FCF_PROTECTION))
   endif
   CONDITIONAL_CFLAGS += $(call TEST_CC_ARG, -fno-jump-tables)
   CONDITIONAL_CFLAGS += $(call TEST_CC_ARG, -mindirect-branch-register)
@@ -211,8 +226,14 @@ LINKER_SCRIPT = nv-kernel.ld
 NV_KERNEL_O_LDFLAGS += $(LDFLAGS)
 NV_KERNEL_O_LDFLAGS += -T $(LINKER_SCRIPT)
 
+# On aarch64 with tracing, also include nv-kernel.patchable.ld so the
+# KEEP() directive preserves __patchable_function_entries from --gc-sections.
+ifeq ($(NV_KERNEL_TRACING)-$(TARGET_ARCH),1-aarch64)
+  NV_KERNEL_O_LDFLAGS += -T nv-kernel.patchable.ld
+endif
 
-$(NV_KERNEL_O): $(OBJS) $(EXPORTS_LINK_COMMAND) $(LINKER_SCRIPT)
+
+$(NV_KERNEL_O): $(OBJS) $(EXPORTS_LINK_COMMAND) $(LINKER_SCRIPT) nv-kernel.patchable.ld
 	$(call quiet_cmd,LD) \
 	  $(NV_KERNEL_O_LDFLAGS) \
 	  -r -o $(NV_KERNEL_O) $(OBJS) @$(EXPORTS_LINK_COMMAND)

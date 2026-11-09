@@ -16,7 +16,7 @@ extern "C" {
 #endif
 
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2014-2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2014-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -63,6 +63,14 @@ typedef struct OBJOS OBJOS;
 #endif /* __nvoc_class_id_OBJOS */
 
 
+struct RmClient;
+
+#ifndef __nvoc_class_id_RmClient
+#define __nvoc_class_id_RmClient 0xb23d83u
+typedef struct RmClient RmClient;
+#endif /* __nvoc_class_id_RmClient */
+
+
 
 typedef struct HOST_VGPU_DEVICE HOST_VGPU_DEVICE;
 
@@ -97,8 +105,9 @@ struct OBJHYPERVISOR {
     struct Object *__nvoc_pbase_Object;    // obj super
     struct OBJHYPERVISOR *__nvoc_pbase_OBJHYPERVISOR;    // hypervisor
 
-    // 1 PDB property
+    // 2 PDB properties
     NvBool PDB_PROP_HYPERVISOR_DRIVERVM_ENABLED;
+    NvBool PDB_PROP_HYPERVISOR_HYPERV_L1VH_ENABLED;
 
     // Data members
     NvBool bDetected;
@@ -136,6 +145,8 @@ extern const struct NVOC_CLASS_DEF __nvoc_class_def_OBJHYPERVISOR;
 // Property macros
 #define PDB_PROP_HYPERVISOR_DRIVERVM_ENABLED_BASE_CAST
 #define PDB_PROP_HYPERVISOR_DRIVERVM_ENABLED_BASE_NAME PDB_PROP_HYPERVISOR_DRIVERVM_ENABLED
+#define PDB_PROP_HYPERVISOR_HYPERV_L1VH_ENABLED_BASE_CAST
+#define PDB_PROP_HYPERVISOR_HYPERV_L1VH_ENABLED_BASE_NAME PDB_PROP_HYPERVISOR_HYPERV_L1VH_ENABLED
 
 
 NV_STATUS __nvoc_objCreateDynamic_OBJHYPERVISOR(Dynamic**, Dynamic*, NvU32, va_list);
@@ -148,8 +159,8 @@ NV_STATUS __nvoc_objCreate_OBJHYPERVISOR(OBJHYPERVISOR**, Dynamic*, NvU32);
 // Wrapper macros for implementation functions
 #define hypervisorIsVgxHyper() hypervisorIsVgxHyper_IMPL()
 
-NvBool hypervisorCheckForObjectAccess_IMPL(NvHandle hClient);
-#define hypervisorCheckForObjectAccess(hClient) hypervisorCheckForObjectAccess_IMPL(hClient)
+NvBool hypervisorCheckForObjectAccess_IMPL(struct RmClient *pClient);
+#define hypervisorCheckForObjectAccess(pClient) hypervisorCheckForObjectAccess_IMPL(pClient)
 
 NvBool hypervisorIsType_IMPL(HYPERVISOR_TYPE hyperType);
 #define hypervisorIsType(hyperType) hypervisorIsType_IMPL(hyperType)

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2016-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2016-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -56,13 +56,14 @@
 #define BINDATA_FLAG_REFERENCED      0x02
 #define BINDATA_FLAG_EXTERNAL        0x04 // Only relevant if GR-3428 is enabled
 #define BINDATA_FLAG_EXTERNAL_VMWARE 0x08 // GR-3428: Merge with the above
+#define BINDATA_FLAG_HEAP_ALLOCATED  0x10
 typedef struct
 {
     NvU32           actualSize;         // size of (uncompressed) pData
     NvU32           compressedSize;     // size of (compressed) pData array
     const void *    pData;              // pointer to the raw binary (whether compressed or not) data
     NvU32           flags;              // flags for the bindata entry
-    const NvU32     relOffset;          // Offset of bin within bindata file
+    NvU32           relOffset;          // Offset of bin within bindata file
 } BINDATA_STORAGE_PVT, *PBINDATA_STORAGE_PVT;
 
 //
@@ -73,7 +74,18 @@ typedef struct
 //
 #define BINDATA_IS_MUTABLE RMCFG_FEATURE_PLATFORM_GSP
 #if BINDATA_IS_MUTABLE
-#define BINDATA_CONST __attribute__((section(".bindata")))
+// SANITIZER_INTERFACE_AWARE (expands to no_sanitize("hwaddress") when HWASAN
+// is enabled, empty otherwise): stops -hwasan-all-globals from baking tagged
+// pointers into code that references BINDATA_CONST objects.
+//
+// .bindata is reclaimed to the malloc heap post-init (rmgsp.c
+// _reclaimBindataMemory).  Once donated, the allocator per-chunk-tags user
+// data; any global-init tag baked at compile time would be invalidated by
+// the allocator (or by our __hwasan_init filter which skips .bindata).
+// Leaving compile-time tags on the pointers produces a shadow=0 or shadow=
+// <alloc-tag> mismatch on every subsequent BINDATA_CONST access.  Marking
+// no_sanitize here strips the tagging and instrumentation at the source.
+#define BINDATA_CONST __attribute__((section(".bindata"))) SANITIZER_INTERFACE_AWARE
 #else
 #define BINDATA_CONST const
 #endif

@@ -51,6 +51,29 @@
 #define NV_DRM_USE_EXTENDED_PROPERTIES (DRM_OBJECT_MAX_PROPERTY >= 64)
 
 #include <drm/drm_prime.h>
+#include <drm/drm_gem.h>
+#include <linux/mm.h>
+
+/*
+ * nv_drm_vma_fault_get_page_offset - compute GEM page offset from a vm_fault
+ *
+ * On Linux, vmf->pgoff carries the file-level page index set by the VM.
+ * On FreeBSD, linux_cdev_pager_populate() sets vmf->pgoff = 0 and instead
+ * passes the page index (pidx) via vmf->virtual_address as IDX_TO_OFF(pidx).
+ * Convert back with OFF_TO_IDX and subtract the GEM vma_node start to get
+ * the page offset within the GEM object.
+ */
+static inline unsigned long
+nv_drm_vma_fault_get_page_offset(struct vm_fault *vmf,
+                                 struct drm_gem_object *gem)
+{
+#if defined(NV_LINUX)
+    unsigned long offset = vmf->pgoff;
+#else
+    unsigned long offset = OFF_TO_IDX((uintptr_t)vmf->virtual_address);
+#endif
+    return offset - drm_vma_node_start(&gem->vma_node);
+}
 
 static inline struct sg_table*
 nv_drm_prime_pages_to_sg(struct drm_device *dev,
@@ -444,6 +467,33 @@ int nv_drm_atomic_replace_property_blob_from_id(struct drm_device *dev,
                                                 uint64_t blob_id,
                                                 ssize_t expected_size,
                                                 NvBool *replaced);
+
+/**
+ * nv_drm_atomic_replace_property_blob_from_id_size_range - Look up and replace a property blob (size range)
+ * @dev: DRM device
+ * @blob: Pointer to blob pointer to replace
+ * @blob_id: Blob ID to lookup (0 = NULL)
+ * @min_size: Minimum allowed blob size (inclusive)
+ * @max_size: Maximum allowed blob size (inclusive)
+ *
+ * Returns: 0 on success, -EINVAL if blob not found or length outside [min_size, max_size]
+ */
+int nv_drm_atomic_replace_property_blob_from_id_size_range(struct drm_device *dev,
+                                                           struct drm_property_blob **blob,
+                                                           uint64_t blob_id,
+                                                           ssize_t min_size,
+                                                           ssize_t max_size);
+
+
+/**
+ * nv_drm_blobs_equal - Compare two blobs
+ * @old_blob: Old blob
+ * @new_blob: New blob
+ *
+ * Returns: NV_TRUE if equal, NV_FALSE otherwise
+ */
+NvBool nv_drm_blobs_equal(const struct drm_property_blob *old_blob,
+                          const struct drm_property_blob *new_blob);
 
 /*
  * S31.32 sign-magnitude fixed-point constant for 1.0

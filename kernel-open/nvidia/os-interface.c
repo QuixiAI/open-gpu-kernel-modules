@@ -23,8 +23,10 @@
 
 #define  __NO_VERSION__
 
+#include "conftest.h"
 #include "os-interface.h"
 #include "nv-linux.h"
+#include "nv-pci.h"
 #include <linux/iommu.h>
 #include "nv-caps-imex.h"
 
@@ -37,6 +39,7 @@
 #include <linux/cpuset.h>
 #include <linux/sys_soc.h>
 
+#include <linux/shmem_fs.h>
 #include <linux/pid.h>
 #include <linux/pid_namespace.h>
 #if defined(CONFIG_LOCKDEP)
@@ -44,13 +47,27 @@
 #endif // CONFIG_LOCKDEP
 #if defined(NV_MISC_CGROUP_PRESENT)
 #include <linux/cgroup.h>
-#define NV_USE_MISC_CGROUP
 #endif // NV_MISC_CGROUP_PRESENT
 #if defined(NV_DMEM_CGROUP_PRESENT)
-#define NV_USE_DMEM_CGROUP_API
-#undef NV_USE_MISC_CGROUP
 #include <linux/cgroup_dmem.h>
 #endif // NV_DMEM_CGROUP_PRESENT
+
+#include <linux/mm.h>
+#include <linux/vmalloc.h>
+#include <linux/pci_regs.h>
+
+#if defined(NVCPU_AARCH64)
+#include <linux/arm-smccc.h>
+
+#if defined(NV_CRYPTO_PRESENT) && \
+    (defined(CONFIG_CRYPTO_HASH) || defined(CONFIG_CRYPTO_HASH_MODULE))
+#define NV_USE_KERNEL_CRYPTO_HASH 1
+#endif // defined(NV_CRYPTO_PRESENT) && CONFIG_CRYPTO_HASH
+#endif // NVCPU_AARCH64
+
+#if defined(NV_USE_KERNEL_CRYPTO_HASH)
+#include <crypto/hash.h>
+#endif // NV_USE_KERNEL_CRYPTO_HASH
 
 extern char *NVreg_TemporaryFilePath;
 
@@ -72,6 +89,74 @@ NvBool os_cc_sev_snp_enabled = 0;
 NvBool os_cc_snp_vtom_enabled = 0;
 NvBool os_cc_tdx_enabled = 0;
 NvBool os_cc_sme_enabled = 0;
+NvBool os_tdisp_enabled = 0;
+
+NvBool NV_API_CALL os_is_tdisp_tdi_run_state(void *nv_state)
+{
+    nv_state_t *nv = nv_state;
+
+    if (nv == NULL)
+        return NV_FALSE;
+
+    if (!os_tdisp_enabled)
+        return NV_FALSE;
+
+    return nv->tdisp_dma_mapping_ready;
+}
+
+/*
+ * Map a contiguous physical device range with protected (encrypted) attributes.
+ *
+ * TDISP BAR0 contains protected regions and unprotected holes. A regular
+ * whole-BAR ioremap path classifies the mixed range as unprotected, but RM
+ * needs one protected BAR0 map after RUN state. The unprotected holes, such as
+ * MSI-X and CXL MEMBAR, are VMM trap/emulated ranges, so a protected stage-1
+ * mapping does not cause GPT faults. vmap_pfn() with explicit
+ * pgprot_encrypted(pgprot_device(PAGE_KERNEL)) preserves the needed PTE
+ * attributes for the protected BAR0 regions. pgprot_encrypted() may
+ * reference cc_mkenc() on x86, and vmap_pfn() may be GPL-only, so keep
+ * the implementation behind link-safe export checks.
+ */
+void* NV_API_CALL os_map_device_paddr_range_protected(NvU64 phys_addr, NvU64 size)
+{
+#if NV_CHECK_EXPORT_SYMBOL(vmap_pfn) && \
+    defined(NV_PGPROT_ENCRYPTED_PRESENT) && \
+    (defined(NVCPU_AARCH64) || NV_CHECK_EXPORT_SYMBOL(cc_mkenc))
+    unsigned long *pfns;
+    void *vaddr;
+    pgprot_t prot;
+    size_t i;
+    size_t bytes = (size_t)size;
+    size_t nr_pages = bytes / PAGE_SIZE;
+
+    if (nr_pages == 0)
+    {
+        return NULL;
+    }
+
+    pfns = kvmalloc_array(nr_pages, sizeof(unsigned long), GFP_KERNEL);
+    if (pfns == NULL)
+    {
+        return NULL;
+    }
+
+    for (i = 0; i < nr_pages; i++)
+    {
+        pfns[i] = (unsigned long)(((phys_addr_t)phys_addr >> PAGE_SHIFT) + i);
+    }
+
+    prot = pgprot_device(PAGE_KERNEL);
+    prot = pgprot_encrypted(prot);
+
+    vaddr = vmap_pfn(pfns, nr_pages, prot);
+    kvfree(pfns);
+    return vaddr;
+#else
+    (void)phys_addr;
+    (void)size;
+    return NULL;
+#endif
+}
 
 #if defined(CONFIG_DMA_SHARED_BUFFER)
 NvBool os_dma_buf_enabled = NV_TRUE;
@@ -343,7 +428,7 @@ NV_STATUS NV_API_CALL os_cond_acquire_rwlock_read(void *pRwLock)
 {
     os_rwlock_t *os_rwlock = (os_rwlock_t *)pRwLock;
 
-    if (down_read_trylock(&os_rwlock->sem))
+    if (!down_read_trylock(&os_rwlock->sem))
     {
         return NV_ERR_TIMEOUT_RETRY;
     }
@@ -355,7 +440,7 @@ NV_STATUS NV_API_CALL os_cond_acquire_rwlock_write(void *pRwLock)
 {
     os_rwlock_t *os_rwlock = (os_rwlock_t *)pRwLock;
 
-    if (down_write_trylock(&os_rwlock->sem))
+    if (!down_write_trylock(&os_rwlock->sem))
     {
         return NV_ERR_TIMEOUT_RETRY;
     }
@@ -653,7 +738,7 @@ NV_STATUS NV_API_CALL os_alloc_mem(
         }
         if (*address == NULL)
         {
-            *address = nv_vmalloc(alloc_size);
+            *address = nv_vmalloc(alloc_size, GFP_KERNEL);
             alloc_size |= VMALLOC_ALLOCATION_SIZE_FLAG;
         }
     }
@@ -705,9 +790,7 @@ NV_STATUS NV_API_CALL os_get_system_time(
 //
 NvU64 NV_API_CALL os_get_monotonic_time_ns_hr(void)
 {
-    struct timespec64 tm;
-    ktime_get_raw_ts64(&tm);
-    return (NvU64) timespec64_to_ns(&tm);
+    return nv_ktime_get_raw_ns();
 }
 
 NvU64 NV_API_CALL os_get_monotonic_time_ns(void)
@@ -737,7 +820,7 @@ NvU64 NV_API_CALL os_get_monotonic_tick_resolution_ns(void)
 
 NV_STATUS NV_API_CALL os_delay_us(NvU32 MicroSeconds)
 {
-    return nv_sleep_us(MicroSeconds);
+    return nv_delay_us(MicroSeconds);
 }
 
 NV_STATUS NV_API_CALL os_delay(NvU32 MilliSeconds)
@@ -901,6 +984,102 @@ int NV_API_CALL nv_printf(NvU32 debuglevel, const char *printf_format, ...)
     return chars_written;
 }
 
+int NV_API_CALL nv_vprintf(NvU32 debuglevel, const char *printf_format, va_list arglist)
+{
+    int chars_written = 0;
+
+    if (debuglevel >= ((cur_debuglevel >> 4) & 0x3))
+    {
+        size_t length;
+        unsigned long flags;
+        va_list arglistCopy;
+
+        length = strlen(printf_format);
+        if (length < 1)
+            return 0;
+
+        NV_SPIN_LOCK_IRQSAVE(&nv_error_string_lock, flags);
+
+        memcpy(nv_error_string, KERN_CONT, sizeof(KERN_CONT) - 1);
+        memcpy(nv_error_string + sizeof(KERN_CONT) - 1, printf_format, length + 1);
+
+        va_copy(arglistCopy, arglist);
+        chars_written = vprintk(nv_error_string, arglistCopy);
+        va_end(arglistCopy);
+
+        NV_SPIN_UNLOCK_IRQRESTORE(&nv_error_string_lock, flags);
+    }
+
+    return chars_written;
+}
+
+static int
+_nv_log_level_to_linux_syslog_level(NV_LOG_LEVEL level)
+{
+    switch (level)
+    {
+        case NV_LOG_LEVEL_ALERT:   return LOGLEVEL_ALERT;
+        case NV_LOG_LEVEL_CRIT:    return LOGLEVEL_CRIT;
+        case NV_LOG_LEVEL_ERROR:   return LOGLEVEL_ERR;
+        case NV_LOG_LEVEL_WARNING: return LOGLEVEL_WARNING;
+        case NV_LOG_LEVEL_NOTICE:  return LOGLEVEL_NOTICE;
+        case NV_LOG_LEVEL_INFO:    return LOGLEVEL_INFO;
+        case NV_LOG_LEVEL_DEBUG:   return LOGLEVEL_DEBUG;
+        default:                   return LOGLEVEL_INFO;
+    }
+}
+
+int NV_API_CALL nv_dev_printf(struct nv_state_t *nv, NV_LOG_LEVEL level, const char *printf_format, ...)
+{
+    va_list arglist;
+    int chars_written;
+
+    va_start(arglist, printf_format);
+    chars_written = nv_dev_vprintf(nv, level, printf_format, arglist);
+    va_end(arglist);
+
+    return chars_written;
+}
+
+int NV_API_CALL nv_dev_vprintf(struct nv_state_t *nv, NV_LOG_LEVEL level, const char *printf_format, va_list arglist)
+{
+    int chars_written = 0;
+    nv_linux_state_t *nvl;
+    struct device *dev;
+    va_list arglistCopy;
+
+    if (nv == NULL)
+        return 0;
+
+    nvl = NV_GET_NVL_FROM_NV_STATE(nv);
+    dev = (nvl != NULL) ? nvl->dev : NULL;
+    if (dev == NULL)
+        return 0;
+
+    //
+    // Prepend the visible "<driver> <dev_name>: " prefix in the format the
+    // same way Linux's _dev_printk() does. dev_vprintk_emit() on its own
+    // only attaches device info to the structured syslog metadata; it does
+    // not inject a visible prefix into the message text. Without this
+    // wrapping, portDbgDevicePrintf() callers would show up in dmesg
+    // without the "<driver> <bus-id>:" prefix the API was intended to
+    // provide (e.g. "nvidia 0000:c1:00.0: ...").
+    //
+    {
+        struct va_format vaf;
+
+        va_copy(arglistCopy, arglist);
+        vaf.fmt = printf_format;
+        vaf.va  = &arglistCopy;
+        chars_written = dev_printk_emit(_nv_log_level_to_linux_syslog_level(level),
+                                        dev, "%s %s: %pV",
+                                        dev_driver_string(dev), dev_name(dev), &vaf);
+        va_end(arglistCopy);
+    }
+
+    return chars_written;
+}
+
 NvS32 NV_API_CALL os_snprintf(char *buf, NvU32 size, const char *fmt, ...)
 {
     va_list arglist;
@@ -1024,7 +1203,6 @@ void* NV_API_CALL os_map_kernel_space(
                     nv_ioremap_wc(start, size_bytes);
             break;
         case NV_MEMORY_UNCACHED:
-        case NV_MEMORY_DEFAULT:
             vaddr = nv_ioremap_nocache(start, size_bytes);
             break;
         default:
@@ -1702,7 +1880,7 @@ NV_STATUS NV_API_CALL os_alloc_pages_node
 (
     NvS32  nid,
     NvU32  size,
-    NvU32  flag,
+    NvU32  flags,
     NvU64 *pAddress
 )
 {
@@ -1738,9 +1916,28 @@ NV_STATUS NV_API_CALL os_alloc_pages_node
      *                              non-essential memory will also benefit the
      *                              system as a whole.
      *
-     * 6. (Optional) __GFP_RECLAIM: Used to allow/forbid reclaim.
+     * 6. __GFP_ACCOUNT:            Used to track/account for allocations with cgroups.
+     *                              The first attempt at adding this flag caused crashes
+     *                              in some tests using CentOS and old kernels (4.18).
+     *                              UVM has a similar guard against older versions, so we're
+     *                              using one here to be at-or-later than the versions we
+     *                              support for vidmem cgroup tracking (5.14+)
+     *
+     * 7. (Optional) __GFP_RECLAIM: Used to allow/forbid reclaim.
      *                              This is part of GFP_USER and consequently
      *                              GFP_HIGHUSER_MOVABLE.
+     *
+     * 8. (Optional) __GFP_NOMEMALLOC: Used to prevent access to "atomic" reserves.
+     *                                 Kernels 6.4+ removed __GFP_ATOMIC and
+     *                                 replaced the functionality with a negative
+     *                                 check for DIRECT_RECLAIM. Having access to
+     *                                 atomic reserves comes with constraints and
+     *                                 it can grow the dynamic part of the reserves.
+     *                                 Since kernel 6.6 the static reseves are only
+     *                                 32 pages for ZONE_MOVABLE so it's ok to not
+     *                                 have access to the reserves.
+     *                              
+     *
      *
      * Some of these flags are relatively more recent, with the last of them
      * (GFP_HIGHUSER_MOVABLE) having been added with this Linux kernel commit:
@@ -1754,9 +1951,20 @@ NV_STATUS NV_API_CALL os_alloc_pages_node
     gfp_mask = __GFP_THISNODE | GFP_HIGHUSER_MOVABLE | __GFP_COMP |
                __GFP_NOWARN | __GFP_RETRY_MAYFAIL;
 
-    if (flag & NV_ALLOC_PAGES_NODE_SKIP_RECLAIM)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
+    if (flags & NV_ALLOC_PAGES_NODE_DO_ACCOUNT)
+    {
+        gfp_mask |= __GFP_ACCOUNT;
+    }
+#endif
+
+    if (flags & NV_ALLOC_PAGES_NODE_SKIP_RECLAIM)
     {
         gfp_mask &= ~(__GFP_RECLAIM);
+        // Skipping direct reclaim on highorder allocations would grow
+        // highatomic reserves, prevent this with __GFP_NOMEMALLOC.
+        if (order > 0)
+            gfp_mask |= __GFP_NOMEMALLOC;
     }
 
     alloc_addr = alloc_pages_node(nid, gfp_mask, order);
@@ -1849,60 +2057,94 @@ NV_STATUS NV_API_CALL os_numa_memblock_size
     return NV_OK;
 }
 
-NV_STATUS NV_API_CALL os_open_temporary_file
+/*
+ * Allocates an anonymous file to be used only within the kernel.
+ *
+ * This file may bypass LSM checks such as SELinux, so it is important that this
+ * file never be mapped, linked into the filesystem, or assigned a file
+ * descriptor unless access control is checked by the caller.
+ */
+NV_STATUS NV_API_CALL os_allocate_temporary_file
 (
-    void **ppFile
+    void **ppFile,
+    NvU64 size
 )
 {
+    struct file *file = ERR_PTR(-EOPNOTSUPP);
 #if NV_FILESYSTEM_ACCESS_AVAILABLE
-#if defined(O_TMPFILE)
-    struct file *file;
     const char *default_path = "/tmp";
     const int flags = O_TMPFILE | O_LARGEFILE | O_RDWR;
     const char *path = NVreg_TemporaryFilePath;
 
-    /*
-     * The filp_open() call below depends on the current task's fs_struct
-     * (current->fs), which may already be NULL if this is called during
-     * process teardown.
-     */
-    if (current->fs == NULL)
-    {
-        return NV_ERR_OPERATING_SYSTEM;
-    }
-
     if (!path)
     {
-        path = default_path;
-    }
+#if defined(mk_vma_flags)
+#define NV_VMA_NORESERVE mk_vma_flags(VMA_NORESERVE_BIT)
+#else
+#define NV_VMA_NORESERVE VM_NORESERVE
+#endif
 
-    file = filp_open(path, flags, 0);
-    if (IS_ERR(file))
-    {
-        if ((path != default_path) && (PTR_ERR(file) == -ENOENT))
+#if NV_IS_EXPORT_SYMBOL_PRESENT_shmem_kernel_file_setup
+        file = shmem_kernel_file_setup("nvidia-tmp", 0, NV_VMA_NORESERVE);
+#else
+        file = shmem_file_setup("nvidia-tmp", 0, NV_VMA_NORESERVE);
+#endif
+        if (!IS_ERR(file))
         {
-            nv_printf(NV_DBG_ERRORS,
-                      "NVRM: The temporary file path specified via the NVreg_TemporaryFilePath\n"
-                      "NVRM: module parameter does not exist. Defaulting to /tmp.\n");
-
-            file = filp_open(default_path, flags, 0);
+                file->f_flags |= O_LARGEFILE;
         }
     }
 
+    if (path)
+    {
+        /*
+         * The filp_open() call below depends on the current task's fs_struct
+         * (current->fs), which may already be NULL if this is called during
+         * process teardown.
+         */
+        if (current->fs == NULL)
+        {
+            return NV_ERR_OPERATING_SYSTEM;
+        }
+
+        file = filp_open(path, flags, 0);
+        if (IS_ERR(file) && path != default_path)
+        {
+            nv_printf(NV_DBG_ERRORS,
+                      "NVRM: The temporary file path specified via the NVreg_TemporaryFilePath\n"
+                      "NVRM: module parameter could not be opened (error %ld).\n",
+                      PTR_ERR(file));
+        }
+    }
+#endif
+
     if (IS_ERR(file))
     {
+        nv_printf(NV_DBG_INFO,
+                  "NVRM: os_allocate_temporary_file failed: %ld\n",
+                  PTR_ERR(file));
         return NV_ERR_OPERATING_SYSTEM;
     }
+
+#if NV_FILESYSTEM_ACCESS_AVAILABLE
+    if (size > 0)
+    {
+        int fallocate_ret = vfs_fallocate(file, 0, 0, (loff_t)size);
+        if (fallocate_ret < 0)
+        {
+            filp_close(file, NULL);
+            if (fallocate_ret == -EOPNOTSUPP)
+            {
+                return NV_ERR_NOT_SUPPORTED;
+            }
+            return NV_ERR_INSUFFICIENT_RESOURCES;
+        }
+    }
+#endif
 
     *ppFile = (void *)file;
 
     return NV_OK;
-#else
-    return NV_ERR_NOT_SUPPORTED;
-#endif
-#else
-    return NV_ERR_NOT_SUPPORTED;
-#endif
 }
 
 void NV_API_CALL os_close_file
@@ -2271,22 +2513,27 @@ NV_STATUS NV_API_CALL os_tegra_igpu_perf_boost
 (
     void *handle,
     NvBool enable,
-    NvU32 duration
+    NvU32 duration,
+    int boost_type
 )
 {
 #if defined(CONFIG_PM_DEVFREQ) && defined(NV_UPDATE_DEVFREQ_PRESENT)
     nv_state_t *nv = handle;
     nv_linux_state_t *nvl = NV_GET_NVL_FROM_NV_STATE(nv);
+    int (*enable_devfreq_boost_cb)(struct device *dev, unsigned int duration,
+                                   int boost_type);
+    int (*disable_devfreq_boost_cb)(struct device *dev);
     int err;
 
     if (enable)
     {
-        if (nvl->devfreq_enable_boost == NULL)
+        enable_devfreq_boost_cb = READ_ONCE(nvl->enable_devfreq_boost_cb);
+        if (enable_devfreq_boost_cb == NULL)
         {
             return NV_ERR_NOT_SUPPORTED;
         }
 
-        err = nvl->devfreq_enable_boost(nvl->dev, duration);
+        err = enable_devfreq_boost_cb(nvl->dev, duration, boost_type);
         if (err != 0)
         {
             return NV_ERR_OPERATING_SYSTEM;
@@ -2294,12 +2541,13 @@ NV_STATUS NV_API_CALL os_tegra_igpu_perf_boost
     }
     else
     {
-        if (nvl->devfreq_disable_boost == NULL)
+        disable_devfreq_boost_cb = READ_ONCE(nvl->disable_devfreq_boost_cb);
+        if (disable_devfreq_boost_cb == NULL)
         {
             return NV_ERR_NOT_SUPPORTED;
         }
 
-        err = nvl->devfreq_disable_boost(nvl->dev);
+        err = disable_devfreq_boost_cb(nvl->dev);
         if (err != 0)
         {
             return NV_ERR_OPERATING_SYSTEM;
@@ -2310,6 +2558,11 @@ NV_STATUS NV_API_CALL os_tegra_igpu_perf_boost
 #else // !defined(CONFIG_PM_DEVFREQ) || !defined(NV_UPDATE_DEVFREQ_PRESENT)
     return NV_ERR_NOT_SUPPORTED;
 #endif
+}
+
+NvU64 NV_API_CALL os_get_reclaimable_memory_usage(void)
+{
+    return nv_get_reclaimable_memory_usage();
 }
 
 /*
@@ -2687,6 +2940,15 @@ NV_STATUS NV_API_CALL os_numa_remove_gpu_memory
     numa_info.nodeId = nodeId;
     numa_info.ret    = 0;
 
+    if (unlikely(nvl->remove_numa_memory_q.q_kthread == NULL))
+    {
+        nv_printf(NV_DBG_ERRORS,
+                  "NVRM: NUMA memory remove queue is not initialized. base: 0x%lx size: 0x%lx\n",
+                  base, size);
+        NV_ATOMIC_SET(nvl->numa_info.status, NV_IOCTL_NUMA_STATUS_OFFLINE_FAILED);
+        return NV_ERR_INVALID_STATE;
+    }
+
     nv_kthread_q_item_init(&remove_numa_memory_q_item,
                            offline_numa_memory_callback,
                            &numa_info);
@@ -2804,29 +3066,569 @@ NV_STATUS NV_API_CALL os_device_vm_present(void)
 #endif
 }
 
+//
+// Realm device-attestation (DA) object fetch over the RSI/RHI host-call ABI.
+//
+// On an Arm CCA realm guest the host caches per-device attestation objects
+// (certificate, measurements, ...). RM reads one back the same way the
+// CCA-guest driver's rhi_read_cached_object() does: a size query followed by a
+// read into host-shared memory. The transport is the mainline SMCCC helper
+// arm_smccc_1_1_invoke(); the shared buffer uses set_memory_decrypted().
+//
+// The RSI/RHI identifiers below are the fixed hypervisor ABI. They are defined
+// locally rather than pulled from the downstream <asm/rhi.h> /
+// <linux/arm-smccc-rsi.h> (absent on most kernels) so RM stays portable.
+//
+#if defined(NVCPU_AARCH64) && NV_HAVE_MEMORY_ENCRYPT_DECRYPT
+
+//
+// Guest -> RMM transport call. The RHI DA selector is placed in gprs[0]; the
+// RMM relays the block to the host as a host call.
+// Documentation of the host call can be found at:
+// https://support.arm.com/documentation/den0137/2-0bet2-1/?lang=en
+//
+#define NV_SMC_RSI_HOST_CALL                                            \
+    ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_64,           \
+                       ARM_SMCCC_OWNER_STANDARD, 0x199)
+
+//
+// RHI DA function selectors (host-serviced), placed in gprs[0]. These use the
+// Standard-Hyp owner range.
+//
+#define NV_SMC_RHI_CALL(n)                                              \
+    ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_64,           \
+                       ARM_SMCCC_OWNER_STANDARD_HYP, (n))
+#define NV_RHI_DA_OBJECT_SIZE           NV_SMC_RHI_CALL(0x4C)
+#define NV_RHI_DA_OBJECT_READ           NV_SMC_RHI_CALL(0x4D)
+
+#define NV_RHI_DA_OBJECT_CERTIFICATE    0x1
+
+#define NV_RSI_SUCCESS                  0x0
+#define NV_RHI_DA_SUCCESS               0x0
+
+// Host-side cap on a cached DA object (SZ_16M).
+#define NV_RHI_DA_MAX_OBJECT_SIZE       (16 * 1024 * 1024)
+
+//
+// Mirror of the RSI host-call block. It is handed to the RMM by physical
+// address, so it must live in the kernel linear map (kmalloc, never a
+// VMAP_STACK local) for virt_to_phys() to be valid. 256-byte aligned per ABI.
+//
+struct nv_rsi_host_call
+{
+    union
+    {
+        NvU16 imm;
+        NvU64 padding0;
+    };
+    NvU64 gprs[31];
+} __aligned(0x100);
+
+static NV_STATUS _nv_rhi_host_call(struct nv_rsi_host_call *pCall)
+{
+    struct arm_smccc_res res;
+
+    arm_smccc_1_1_invoke(NV_SMC_RSI_HOST_CALL, virt_to_phys(pCall), &res);
+
+    if (res.a0 != NV_RSI_SUCCESS)
+    {
+        nv_printf(NV_DBG_ERRORS,
+                  "NVRM: %s: RSI host call failed (0x%lx)\n",
+                  __FUNCTION__, res.a0);
+        return NV_ERR_GENERIC;
+    }
+    if (pCall->gprs[0] != NV_RHI_DA_SUCCESS)
+    {
+        nv_printf(NV_DBG_ERRORS,
+                  "NVRM: %s: RHI DA call failed (0x%llx)\n",
+                  __FUNCTION__, pCall->gprs[0]);
+        return NV_ERR_GENERIC;
+    }
+    return NV_OK;
+}
+
+//
+// Linux uses the device requester id as the vdev id:
+//   (PCI segment << 16) | (bus << 8) | devfn
+//
+static NvU32 _nv_rhi_vdev_id(struct pci_dev *pdev)
+{
+    return (pci_domain_nr(pdev->bus) << 16) |
+           (pdev->bus->number << 8) |
+           pdev->devfn;
+}
+
+static NV_STATUS _nv_rhi_read_cached_object(struct pci_dev *pdev,
+                                            NvU32           objectType,
+                                            NvU8           *pBuffer,
+                                            NvU32          *pBufferSize)
+{
+    NV_STATUS                status;
+    struct nv_rsi_host_call *pCall;
+    struct page             *pShared;
+    void                    *pSharedBuf;
+    NvU32                    vdevId    = _nv_rhi_vdev_id(pdev);
+    NvU32                    capacity  = *pBufferSize;
+    NvU32                    objectSize;
+    int                      order;
+
+    pCall = kmalloc(sizeof(*pCall), GFP_KERNEL);
+    if (pCall == NULL)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    // Step 1: query the object size.
+    memset(pCall, 0, sizeof(*pCall));
+    pCall->gprs[0] = NV_RHI_DA_OBJECT_SIZE;
+    pCall->gprs[1] = vdevId;
+    pCall->gprs[2] = objectType;
+
+    status = _nv_rhi_host_call(pCall);
+    if (status != NV_OK)
+    {
+        goto free_call;
+    }
+
+    if ((pCall->gprs[1] == 0) || (pCall->gprs[1] > NV_RHI_DA_MAX_OBJECT_SIZE))
+    {
+        status = NV_ERR_INVALID_DATA;
+        goto free_call;
+    }
+
+    objectSize = (NvU32)pCall->gprs[1];
+
+    // Report the required size whether or not it fits the caller's buffer.
+    *pBufferSize = objectSize;
+    if (objectSize > capacity)
+    {
+        status = NV_ERR_BUFFER_TOO_SMALL;
+        goto free_call;
+    }
+
+    // Allocate a host-shared buffer for the host to write the object into.
+    order = get_order(objectSize);
+    pShared = alloc_pages(GFP_KERNEL | __GFP_ZERO, order);
+    if (pShared == NULL)
+    {
+        status = NV_ERR_NO_MEMORY;
+        goto free_call;
+    }
+    pSharedBuf = page_address(pShared);
+
+    if (set_memory_decrypted((unsigned long)pSharedBuf, 1 << order) != 0)
+    {
+        //
+        // On failure the page state is indeterminate and unsafe to free back
+        // to the encrypted pool, so leak it (set_memory_decrypted has WARNed).
+        //
+        status = NV_ERR_OPERATING_SYSTEM;
+        goto free_call;
+    }
+
+    // Step 2: read the object into the shared buffer.
+    memset(pCall, 0, sizeof(*pCall));
+    pCall->gprs[0] = NV_RHI_DA_OBJECT_READ;
+    pCall->gprs[1] = vdevId;
+    pCall->gprs[2] = objectType;
+    pCall->gprs[3] = virt_to_phys(pSharedBuf);
+    pCall->gprs[4] = objectSize;
+    pCall->gprs[5] = 0; // offset to read from
+
+    status = _nv_rhi_host_call(pCall);
+    if (status != NV_OK)
+    {
+        goto free_shared;
+    }
+
+    if ((NvU32)pCall->gprs[1] != objectSize)
+    {
+        // Short read.
+        status = NV_ERR_INVALID_DATA;
+        goto free_shared;
+    }
+
+    memcpy(pBuffer, pSharedBuf, objectSize);
+    status = NV_OK;
+
+free_shared:
+    if (set_memory_encrypted((unsigned long)pSharedBuf, 1 << order) == 0)
+    {
+        __free_pages(pShared, order);
+    }
+free_call:
+    kfree(pCall);
+    return status;
+}
+
+//
+// RSI selector serviced by the RMM itself rather than relayed to the host.
+// The RMM is the trusted bridge, so its view of the device certificate is the
+// authority on which GPU the guest is really bound to; the chain fetched over
+// RHI comes from the untrusted host and can be swapped for another GPU's.
+//
+#define NV_SMC_RSI_VDEV_GET_INFO                                        \
+    ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_64,           \
+                       ARM_SMCCC_OWNER_STANDARD, 0x19D)
+
+// Digest algorithm as encoded by RSI, reported in hashAlgo below.
+#define NV_RSI_HASH_SHA_256             0x0
+#define NV_RSI_HASH_SHA_512             0x1
+#define NV_RSI_HASH_SHA_384             0x2
+
+#define NV_RSI_SHA_256_DIGEST_SIZE      32
+#define NV_RSI_SHA_512_DIGEST_SIZE      64
+#define NV_RSI_SHA_384_DIGEST_SIZE      48
+
+//
+// Mirror of the RMM's vdevice info block. Only hashAlgo and identityDigest are
+// consumed, but every preceding field is load-bearing for the offsets that
+// follow it, so the layout is reproduced whole. The u8 fields genuinely occupy
+// 8-byte slots.
+// Source: https://support.arm.com/documentation/den0137/2-0bet3/?lang=en
+// See the RmmVdev type at C2.78
+//
+struct nv_rsi_vdevice_info
+{
+    NvU64 flags;
+    NvU64 idIndex;
+    union
+    {
+        NvU8  hashAlgo;
+        NvU64 padding0;
+    };
+    NvU64 lockNonce;
+    NvU64 measNonce;
+    NvU64 reportNonce;
+    union
+    {
+        NvU8  formatType;
+        NvU64 padding1;
+    };
+    NvU64 formatVersion;
+    union
+    {
+        NvU8  state;
+        NvU64 padding2;
+    };
+    NvU8  reserved0[0x80 - 0x48];
+    NvU8  protocolDataDigest[64];
+    NvU8  identityDigest[64];
+    NvU8  pubkeyDigest[64];
+    NvU8  measDigest[64];
+    NvU8  reportDigest[64];
+    NvU64 vsmmuAddr;
+    NvU64 vsmuVsid;
+    NvU8  reserved1[0x200 - 0x1D0];
+};
+
+static NV_STATUS _nv_rsi_vdev_get_info(struct pci_dev             *pdev,
+                                       struct nv_rsi_vdevice_info *pInfo)
+{
+    struct arm_smccc_res res = {0};
+
+    BUILD_BUG_ON(sizeof(struct nv_rsi_vdevice_info) != 0x200);
+    BUILD_BUG_ON(offsetof(struct nv_rsi_vdevice_info, hashAlgo) != 0x10);
+    BUILD_BUG_ON(offsetof(struct nv_rsi_vdevice_info, identityDigest) != 0xC0);
+
+    arm_smccc_1_1_invoke(NV_SMC_RSI_VDEV_GET_INFO,
+                         _nv_rhi_vdev_id(pdev), virt_to_phys(pInfo), &res);
+
+    if (res.a0 != NV_RSI_SUCCESS)
+    {
+        nv_printf(NV_DBG_ERRORS,
+                  "NVRM: %s: RSI VDEV_GET_INFO failed (0x%lx)\n",
+                  __FUNCTION__, res.a0);
+        return NV_ERR_GENERIC;
+    }
+    return NV_OK;
+}
+
+// Without the kernel crypto API this check cannot run, and a check that cannot
+// run must fail.
+static NV_STATUS _nv_hash_buffer(const char *pAlgName,
+                                 const void *pData,
+                                 NvU32       dataSize,
+                                 NvU8       *pHash)
+{
+#if defined(NV_USE_KERNEL_CRYPTO_HASH)
+    struct crypto_shash *pAlg;
+    int                  ret;
+
+    pAlg = crypto_alloc_shash(pAlgName, 0, 0);
+    if (IS_ERR(pAlg))
+    {
+        nv_printf(NV_DBG_ERRORS,
+                  "NVRM: %s: crypto_alloc_shash(%s) failed (%ld)\n",
+                  __FUNCTION__, pAlgName, PTR_ERR(pAlg));
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    ret = crypto_shash_tfm_digest(pAlg, pData, dataSize, pHash);
+    crypto_free_shash(pAlg);
+
+    if (ret != 0)
+    {
+        nv_printf(NV_DBG_ERRORS,
+                  "NVRM: %s: %s digest failed (%d)\n",
+                  __FUNCTION__, pAlgName, ret);
+        return NV_ERR_GENERIC;
+    }
+    return NV_OK;
+#else
+    nv_printf(NV_DBG_ERRORS,
+              "NVRM: %s: kernel crypto API unavailable, cannot hash with %s\n",
+              __FUNCTION__, pAlgName);
+    return NV_ERR_NOT_SUPPORTED;
+#endif // NV_USE_KERNEL_CRYPTO_HASH
+}
+
+NV_STATUS NV_API_CALL os_read_device_cert_digests(void       *nv_state,
+                                                  const NvU8 *pCertChain,
+                                                  NvU32       certChainSize,
+                                                  NvU8       *pTsmDigest,
+                                                  NvU8       *pLocalDigest,
+                                                  NvU32      *pDigestSize)
+{
+    nv_state_t                 *nv = nv_state;
+    nv_linux_state_t           *nvl;
+    struct nv_rsi_vdevice_info *pInfo;
+    const char                 *pAlgName;
+    NvU32                       digestSize;
+    NV_STATUS                   status;
+
+    if ((nv == NULL) || (pCertChain == NULL) || (certChainSize == 0) ||
+        (pTsmDigest == NULL) || (pLocalDigest == NULL) || (pDigestSize == NULL))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    nvl = NV_GET_NVL_FROM_NV_STATE(nv);
+    if ((nvl == NULL) || (nvl->pci_dev == NULL))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    //
+    // Handed to the RMM by physical address, so it must live in the kernel
+    // linear map. Unlike the RHI shared buffer this stays encrypted: the RMM
+    // writes it, and decrypting it would let the host forge the very digest
+    // this path exists to check.
+    //
+    pInfo = kmalloc(sizeof(*pInfo), GFP_KERNEL | __GFP_ZERO);
+    if (pInfo == NULL)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    status = _nv_rsi_vdev_get_info(nvl->pci_dev, pInfo);
+    if (status != NV_OK)
+    {
+        goto done;
+    }
+
+    switch (pInfo->hashAlgo)
+    {
+        case NV_RSI_HASH_SHA_256:
+            pAlgName   = "sha256";
+            digestSize = NV_RSI_SHA_256_DIGEST_SIZE;
+            break;
+        case NV_RSI_HASH_SHA_512:
+            pAlgName   = "sha512";
+            digestSize = NV_RSI_SHA_512_DIGEST_SIZE;
+            break;
+        case NV_RSI_HASH_SHA_384:
+            pAlgName   = "sha384";
+            digestSize = NV_RSI_SHA_384_DIGEST_SIZE;
+            break;
+        default:
+            nv_printf(NV_DBG_ERRORS,
+                      "NVRM: %s: RMM reported unknown hash algorithm %u\n",
+                      __FUNCTION__, pInfo->hashAlgo);
+            status = NV_ERR_NOT_SUPPORTED;
+            goto done;
+    }
+
+    if (*pDigestSize < digestSize)
+    {
+        *pDigestSize = digestSize;
+        status = NV_ERR_BUFFER_TOO_SMALL;
+        goto done;
+    }
+
+    status = _nv_hash_buffer(pAlgName, pCertChain, certChainSize, pLocalDigest);
+    if (status != NV_OK)
+    {
+        goto done;
+    }
+
+    // Only the leading digestSize bytes of the 64-byte slot are meaningful.
+    memcpy(pTsmDigest, pInfo->identityDigest, digestSize);
+    *pDigestSize = digestSize;
+
+done:
+    kfree(pInfo);
+    return status;
+}
+
+NV_STATUS NV_API_CALL os_read_device_certificate(void  *nv_state,
+                                                 NvU8  *pBuffer,
+                                                 NvU32 *pBufferSize)
+{
+    nv_state_t       *nv = nv_state;
+    nv_linux_state_t *nvl;
+
+    if ((nv == NULL) || (pBuffer == NULL) || (pBufferSize == NULL))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    nvl = NV_GET_NVL_FROM_NV_STATE(nv);
+    if ((nvl == NULL) || (nvl->pci_dev == NULL))
+    {
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return _nv_rhi_read_cached_object(nvl->pci_dev,
+                                      NV_RHI_DA_OBJECT_CERTIFICATE,
+                                      pBuffer, pBufferSize);
+}
+
+#else // defined(NVCPU_AARCH64) && NV_HAVE_MEMORY_ENCRYPT_DECRYPT
+
+NV_STATUS NV_API_CALL os_read_device_certificate(void  *nv_state,
+                                                 NvU8  *pBuffer,
+                                                 NvU32 *pBufferSize)
+{
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+NV_STATUS NV_API_CALL os_read_device_cert_digests(void       *nv_state,
+                                                  const NvU8 *pCertChain,
+                                                  NvU32       certChainSize,
+                                                  NvU8       *pTsmDigest,
+                                                  NvU8       *pLocalDigest,
+                                                  NvU32      *pDigestSize)
+{
+    return NV_ERR_NOT_SUPPORTED;
+}
+
+#endif // defined(NVCPU_AARCH64) && NV_HAVE_MEMORY_ENCRYPT_DECRYPT
+
 NvBool NV_API_CALL os_supports_kernel_suspend_notifiers(void)
 {
     return (NVreg_UseKernelSuspendNotifiers == 1);
 }
 
-#if defined(NV_USE_DMEM_CGROUP_API)
 NvU32 NV_API_CALL os_cgroup_implementation(void)
 {
-    return OS_CGROUP_IMPL_DMEM;
+#if defined(NV_DMEM_CGROUP_PRESENT)
+    if (cgroup_subsys_enabled(dmem_cgrp_subsys))
+        return OS_CGROUP_IMPL_DMEM;
+#endif
+#if defined(NV_MISC_CGROUP_PRESENT)
+    if (cgroup_subsys_enabled(misc_cgrp_subsys))
+        return OS_CGROUP_IMPL_MISC;
+#endif
+    return OS_CGROUP_IMPL_NONE;
 }
 
-void* NV_API_CALL os_dmem_cgroup_register_region(NvU64 size, const char *name)
+void* NV_API_CALL os_cgroup_for_pid(int pid, void *pidInfo, int impl)
 {
-    void *region = dmem_cgroup_register_region(size, name);
+    void *cgrp = NULL;
+
+#if defined(NV_DMEM_CGROUP_PRESENT) || defined(NV_MISC_CGROUP_PRESENT)
+    struct task_struct *task;
+    struct pid *p;
+    int subsys_id;
+
+    //
+    // pid_task() and task_cgroup() (task_css internally) require
+    // rcu_read_lock() (or one of cgroup_mutex / css_set_lock) to be
+    // held. The returned cgroup pointer is used by the caller only as
+    // an opaque key in the memacct map, so no extra reference is needed
+    // once it has been read out.
+    //
+    rcu_read_lock();
+
+    p = pidInfo ? pidInfo : find_vpid(pid);
+    if (!p)
+        goto out;
+
+    task = pid_task(p, PIDTYPE_PID);
+    if (!task)
+        goto out;
+
+    switch (impl)
+    {
+#if defined(NV_DMEM_CGROUP_PRESENT)
+        case OS_CGROUP_IMPL_DMEM:
+            subsys_id = dmem_cgrp_id;
+            break;
+#endif
+#if defined(NV_MISC_CGROUP_PRESENT)
+        case OS_CGROUP_IMPL_MISC:
+            subsys_id = misc_cgrp_id;
+            break;
+#endif
+        default:
+            goto out;
+    }
+    cgrp = task_cgroup(task, subsys_id);
+
+out:
+    rcu_read_unlock();
+#endif
+    return cgrp;
+}
+
+#if defined(NV_DMEM_CGROUP_PRESENT) || defined(NV_MISC_CGROUP_PRESENT)
+void* NV_API_CALL os_cgroup_parent(void *cgroup)
+{
+    if (cgroup == NULL)
+        return NULL;
+
+    return cgroup_parent(cgroup);
+}
+#else
+void* NV_API_CALL os_cgroup_parent(void *cgroup) { return NULL; }
+#endif
+
+#if defined(NV_DMEM_CGROUP_PRESENT)
+void* NV_API_CALL os_dmem_cgroup_register_region(const char *name, NvU64 size, NvU64 precharge, void **prechargePool)
+{
+    void *region;
+#if defined(NV_DMEM_CGROUP_REGISTER_REGION_HAS_INIT_ARG)
+    const struct dmem_cgroup_init init =
+    {
+        .size = size,
+    };
+    region = dmem_cgroup_register_region(&init, name);
+#else
+    region = dmem_cgroup_register_region(size, name);
+#endif
     if (IS_ERR(region))
     {
         return NULL;
     }
+
+    if (precharge > 0)
+    {
+        int err = dmem_cgroup_try_charge(region, precharge, (struct dmem_cgroup_pool_state **)prechargePool, NULL);
+        if (err)
+        {
+            dmem_cgroup_unregister_region(region);
+            region = NULL;
+        }
+    }
+
     return region;
 }
 
-void NV_API_CALL os_dmem_cgroup_unregister_region(void *region)
+void NV_API_CALL os_dmem_cgroup_unregister_region(void *region, void *prechargePool, NvU64 precharge)
 {
+    if (precharge > 0)
+        dmem_cgroup_uncharge(prechargePool, precharge);
     dmem_cgroup_unregister_region(region);
 }
 
@@ -2848,42 +3650,29 @@ void NV_API_CALL os_dmem_cgroup_uncharge(void *pool, NvU64 size)
     dmem_cgroup_uncharge(pool, size);
 }
 
-#else // defined(NV_USE_DMEM_CGROUP_API)
-void* NV_API_CALL os_dmem_cgroup_register_region(NvU64 size, const char *name) { return NULL; }
-void NV_API_CALL os_dmem_cgroup_unregister_region(void *region) {}
+void NV_API_CALL os_dmem_cgroup_pool_state_put(void *pool)
+{
+    dmem_cgroup_pool_state_put(pool);
+}
+
+NvBool NV_API_CALL os_dmem_cgroup_state_evict_valuable(void *limit_pool, void *test_pool, NvBool ignore_low, NvBool *ret_hit_low)
+{
+    bool kernel_ret_hit_low;
+    NvBool kernel_result = dmem_cgroup_state_evict_valuable(limit_pool, test_pool, ignore_low, &kernel_ret_hit_low);
+    if (ret_hit_low)
+        *ret_hit_low = kernel_ret_hit_low;
+    return kernel_result;
+}
+#else // !defined()
+void* NV_API_CALL os_dmem_cgroup_register_region(const char *name, NvU64 size, NvU64 precharge, void **prechargePool) { return NULL; }
+void NV_API_CALL os_dmem_cgroup_unregister_region(void *region, void *prechargePool, NvU64 precharge) {}
 NV_STATUS NV_API_CALL os_dmem_cgroup_try_charge(void *region, NvU64 size, void **ret_pool, void **ret_limit_pool) { return NV_OK; }
 void NV_API_CALL os_dmem_cgroup_uncharge(void *pool, NvU64 size) {}
-#endif // defined(NV_USE_DMEM_CGROUP_API)
+void NV_API_CALL os_dmem_cgroup_pool_state_put(void *pool) {}
+NvBool NV_API_CALL os_dmem_cgroup_state_evict_valuable(void *limit_pool, void *test_pool, NvBool ignore_low, NvBool *ret_hit_low) { return NV_FALSE; }
+#endif
 
-#if defined(NV_USE_MISC_CGROUP)
-NvU32 NV_API_CALL os_cgroup_implementation(void)
-{
-    return OS_CGROUP_IMPL_MISC;
-}
-
-void* NV_API_CALL os_cgroup_for_pid(int pid, void *pidInfo)
-{
-    struct pid *p;
-
-    if (pidInfo)
-        p = pidInfo;
-    else
-        p = find_vpid(pid);
-
-    if (!p)
-        return NULL;
-
-    struct task_struct *task = pid_task(p, PIDTYPE_PID);
-    if (!task)
-        return NULL;
-
-    struct cgroup_subsys_state *css = task_css(task, misc_cgrp_id);
-    if (!css)
-        return NULL;
-
-    return css->cgroup;
-}
-
+#if defined(NV_MISC_CGROUP_PRESENT)
 void* NV_API_CALL os_cgroup_get_from_fd(NvU32 fd)
 {
     void *cgroup = cgroup_get_from_fd(fd);
@@ -2891,21 +3680,19 @@ void* NV_API_CALL os_cgroup_get_from_fd(NvU32 fd)
         return NULL;
     return cgroup;
 }
+
 void NV_API_CALL os_cgroup_put(void *cgroup)
 {
     if (cgroup != NULL)
         cgroup_put(cgroup);
 }
 
-#else // defined(NV_USE_MISC_CGROUP)
-void* NV_API_CALL os_cgroup_for_pid(int pid, void *pidInfo) { return NULL; }
+void NV_API_CALL os_cgroup_get(void *cgroup)
+{
+    cgroup_get(cgroup);
+}
+#else // !defined(NV_MISC_CGROUP_PRESENT)
 void* NV_API_CALL os_cgroup_get_from_fd(NvU32 fd) { return NULL; }
 void NV_API_CALL os_cgroup_put(void *cgroup) {}
-#endif // defined(NV_USE_MISC_CGROUP)
-
-#if (!defined(NV_USE_MISC_CGROUP) && !defined(NV_USE_DMEM_CGROUP_API))
-NvU32 NV_API_CALL os_cgroup_implementation(void)
-{
-    return OS_CGROUP_IMPL_NONE;
-}
+void NV_API_CALL os_cgroup_get(void *cgroup) {}
 #endif

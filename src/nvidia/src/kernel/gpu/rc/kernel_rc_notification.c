@@ -31,6 +31,7 @@
 #include "kernel/gpu/mem_mgr/context_dma.h"
 #include "kernel/gpu/mem_mgr/virt_mem_allocator_common.h"
 #include "kernel/gpu/mig_mgr/kernel_mig_manager.h"
+#include "kernel/gpu/timer/objtmr.h"
 #include "kernel/gpu_mgr/gpu_mgr.h"
 #include "kernel/virtualization/hypervisor/hypervisor.h"
 #include "gpu/bus/kern_bus.h"
@@ -349,24 +350,45 @@ Error:
     return status;
 }
 
+void krcNotifyChannelEvent_IMPL
+(
+    OBJGPU        *pGpu,
+    KernelRc      *pKernelRc,
+    KernelChannel *pKernelChannel,
+    NvU32          exceptType,
+    NvU32          exceptLevel
+)
+{
+    NvRcNotification       params;
+    OBJTMR                *pTmr = GPU_GET_TIMER(pGpu);
+    NvU64                  time;
+    CLI_CHANNEL_CLASS_INFO classInfo;
 
-/*! Send notifications for notifiers what were already written to.
- *
- * GSP writes to notifiers to avoid a race condition between the time when an
- * error is handled and when the client receives notifications. However, GSP
- * doesn't actually send those notification events to the client in some cases
- * as that requires OS interaction.
- *
- * This function actually sends those notifications to the client.
- *
- */
-NV_STATUS
-krcErrorSendEventNotificationsCtxDma_FWCLIENT
+    NV_CHECK_OR_RETURN_VOID(LEVEL_ERROR, pKernelChannel != NULL);
+
+    tmrGetCurrentTime(pTmr, &time);
+
+    params.timeStamp.nanoseconds[0] = NvU64_HI32(time);
+    params.timeStamp.nanoseconds[1] = NvU64_LO32(time);
+    params.exceptLevel              = exceptLevel;
+    params.exceptType               = exceptType;
+
+    CliGetChannelClassInfo(RES_GET_EXT_CLASS_ID(pKernelChannel),
+                           &classInfo);
+
+    kchannelNotifyEvent(pKernelChannel,
+                        classInfo.rcNotifierIndex,
+                        0, 0, &params,
+                        sizeof(params));
+}
+
+static NV_STATUS
+_krcErrorSendChannelEventNotifications
 (
     OBJGPU           *pGpu,
-    KernelRc         *pKernelRc,
     KernelChannel    *pKernelChannel,
-    RC_NOTIFIER_SCOPE scope
+    RC_NOTIFIER_SCOPE scope,
+    KernelChannel    *pSkipChannel
 )
 {
     NV_STATUS          status          = NV_OK;
@@ -376,14 +398,19 @@ krcErrorSendEventNotificationsCtxDma_FWCLIENT
     CHANNEL_LIST      *pChanList;
 
     //
-    // This function should only be called on paths where GSP has already
-    // written to notifiers
-    //
-    NV_ASSERT_OR_RETURN(IS_GSP_CLIENT(pGpu), NV_ERR_INVALID_STATE);
-
     // WAR bug 200326278, 200474671
+    //
+    // Mirror exactly the channel set that krcErrorSetNotifier() wrote notifier
+    // memory for: TSG-wide only when subcontext is supported and the GPU is not
+    // a vGPU host (TSG-wide notification causes vGPU failures). rcErrorNotify()
+    // calls krcErrorSetNotifier() -- which writes and flushes the notifier
+    // memory for this same set -- before this path runs, so matching the
+    // condition guarantees we only raise the OS event on channels whose error
+    // notifier was actually written.
+    //
     if (scope == RC_NOTIFIER_SCOPE_TSG &&
-        kfifoIsSubcontextSupported(pKernelFifo))
+        kfifoIsSubcontextSupported(pKernelFifo) &&
+        !pGpu->getProperty(pGpu, PDB_PROP_GPU_IS_VIRTUALIZATION_MODE_HOST_VGPU))
     {
         // Notify all channels in the TSG
         pChanList = (pKernelChannel->pKernelChannelGroupApi
@@ -411,6 +438,9 @@ krcErrorSendEventNotificationsCtxDma_FWCLIENT
     {
         ContextDma *pContextDma;
 
+        if (pChanNode->pKernelChannel == pSkipChannel)
+            continue;
+
         if (ctxdmaGetByHandle(RES_GET_CLIENT(pChanNode->pKernelChannel),
                               pChanNode->pKernelChannel->hErrorContext,
                               &pContextDma) == NV_OK)
@@ -424,6 +454,17 @@ krcErrorSendEventNotificationsCtxDma_FWCLIENT
                              NV_OS_WRITE_THEN_AWAKEN);
             }
         }
+        else
+        {
+            CLI_CHANNEL_CLASS_INFO classInfo;
+            CliGetChannelClassInfo(
+                RES_GET_EXT_CLASS_ID(pChanNode->pKernelChannel),
+                &classInfo);
+
+            kchannelNotifyEvent(pChanNode->pKernelChannel,
+                                classInfo.rcNotifierIndex,
+                                0, 0, NULL, 0);
+        }
     }
 
 Error:
@@ -435,18 +476,68 @@ Error:
 }
 
 
+/*! Send notifications for notifiers what were already written to.
+ *
+ * GSP writes to notifiers to avoid a race condition between the time when an
+ * error is handled and when the client receives notifications. However, GSP
+ * doesn't actually send those notification events to the client in some cases
+ * as that requires OS interaction.
+ *
+ * This function actually sends those notifications to the client.
+ *
+ */
 NV_STATUS
-krcErrorSendEventNotifications_KERNEL
+krcErrorSendEventNotificationsCtxDma_FWCLIENT
+(
+    OBJGPU           *pGpu,
+    KernelRc         *pKernelRc,
+    KernelChannel    *pKernelChannel,
+    RC_NOTIFIER_SCOPE scope
+)
+{
+    //
+    // This function should only be called on paths where GSP has already
+    // written to notifiers
+    //
+    NV_ASSERT_OR_RETURN(IS_GSP_CLIENT(pGpu), NV_ERR_INVALID_STATE);
+
+    //
+    // GSP does not deliver the per-channel OS event for the offending channel
+    // itself, so notify every channel in the (possibly fake single-channel)
+    // list.
+    //
+    return _krcErrorSendChannelEventNotifications(pGpu, pKernelChannel, scope,
+                                                  NULL /* skip none */);
+}
+
+
+NV_STATUS
+krcErrorSendEventNotificationsCtxDma_MONOLITHIC
+(
+    OBJGPU           *pGpu,
+    KernelRc         *pKernelRc,
+    KernelChannel    *pKernelChannel,
+    RC_NOTIFIER_SCOPE scope
+)
+{
+    //
+    // Monolithic RM sends channel-scope notification in krcErrorInvokeCallback.
+    // Send notifications for the other channels in TSG.
+    //
+    return _krcErrorSendChannelEventNotifications(pGpu, pKernelChannel, scope,
+                                                  pKernelChannel /* skip offending channel */);
+}
+
+
+NV_STATUS
+krcErrorNotifyClients_KERNEL
 (
     OBJGPU            *pGpu,
     KernelRc          *pKernelRc,
     KernelChannel     *pKernelChannel,
-    RM_ENGINE_TYPE     rmEngineType,       // unused
-    NvU32              exceptLevel,        // unused
     NvU32              exceptType,
     RC_NOTIFIER_SCOPE  scope,
-    NvU16              partitionAttributionId,
-    NvBool             bOsRcCallbackNeeded // unused
+    NvU16              partitionAttributionId
 )
 {
     NV_ASSERT_OR_RETURN(!gpumgrGetBcEnabledStatus(pGpu), NV_ERR_INVALID_STATE);

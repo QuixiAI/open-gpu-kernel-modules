@@ -115,6 +115,7 @@ void kgmmuFmtInitPdeMulti_GP10X(KernelGmmu                *pKernelGmmu,
     NV_ASSERT_OR_RETURN_VOID(version == GMMU_FMT_VERSION_2);
 
     // Dual PDE - big part.
+    pPdeBig->mode = GMMU_FMT_MODE_PTR;
     pPdeBig->version = GMMU_FMT_VERSION_2;
     INIT_FIELD_APERTURE(&pPdeBig->fldAperture, NV_MMU_VER2_DUAL_PDE_APERTURE_BIG,
                         pPdeApertures);
@@ -125,6 +126,7 @@ void kgmmuFmtInitPdeMulti_GP10X(KernelGmmu                *pKernelGmmu,
     INIT_FIELD_BOOL(&pPdeBig->fldVolatile, NV_MMU_VER2_DUAL_PDE_VOL_BIG);
 
     // Dual PDE - small part.
+    pPdeSmall->mode = GMMU_FMT_MODE_PTR;
     pPdeSmall->version = GMMU_FMT_VERSION_2;
     INIT_FIELD_APERTURE(&pPdeSmall->fldAperture, NV_MMU_VER2_DUAL_PDE_APERTURE_SMALL,
                         pPdeApertures);
@@ -142,6 +144,7 @@ void kgmmuFmtInitPde_GP10X(KernelGmmu *pKernelGmmu,
 {
     NV_ASSERT_OR_RETURN_VOID(version == GMMU_FMT_VERSION_2);
 
+    pPde->mode = GMMU_FMT_MODE_PTR;
     pPde->version = GMMU_FMT_VERSION_2;
     INIT_FIELD_APERTURE(&pPde->fldAperture, NV_MMU_VER2_PDE_APERTURE,
                         pPdeApertures);
@@ -160,6 +163,7 @@ void kgmmuFmtInitPte_GP10X(KernelGmmu *pKernelGmmu,
 {
     NV_ASSERT_OR_RETURN_VOID(version == GMMU_FMT_VERSION_2);
 
+    pPte->mode = GMMU_FMT_MODE_PTR;
     pPte->version = GMMU_FMT_VERSION_2;
     INIT_FIELD_BOOL(&pPte->fldValid, NV_MMU_VER2_PTE_VALID);
     INIT_FIELD_APERTURE(&pPte->fldAperture, NV_MMU_VER2_PTE_APERTURE, pPteApertures);
@@ -192,12 +196,4 @@ void kgmmuFmtInitPte_GP10X(KernelGmmu *pKernelGmmu,
     {
         INIT_FIELD_ADDRESS(&pPte->fldAddrSysmem, NV_MMU_VER2_PTE_ADDRESS_SYS, NV_MMU_VER2_PTE_ADDRESS_SHIFT);
     }
-}
-
-void kgmmuFmtInitPteComptagLine_GP10X(KernelGmmu *pKernelGmmu,
-                                      GMMU_FMT_PTE *pPte,
-                                      const NvU32 version)
-{
-    NV_ASSERT_OR_RETURN_VOID(version == GMMU_FMT_VERSION_2);
-    INIT_FIELD_DESC32(&pPte->fldCompTagLine, NV_MMU_VER2_PTE_COMPTAGLINE);
 }

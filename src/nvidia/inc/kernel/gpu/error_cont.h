@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -74,6 +74,8 @@ typedef enum _NV_ERROR_CONT_ERR_ID
     NV_ERROR_CONT_ERR_ID_E31_SYSLTC_ECC_TSTG                   = 25,   // FD Error ID: E31: SYSLTC Tag Parity error
     NV_ERROR_CONT_ERR_ID_E32_SYSLTC_ECC_RSTG                   = 26,   // FD Error ID: E32: SYSLTC CBC Parity error
     NV_ERROR_CONT_ERR_ID_E33_SYSLTC_ECC_DSTG_FATAL             = 27,   // FD Error ID: E33: SYSLTC ECC in data region that triggered containment mode
+    NV_ERROR_CONT_ERR_ID_E34_LRC_DED                           = 28,   // FD Error ID: E34: LRC error
+    NV_ERROR_CONT_ERR_ID_COUNT                                        // must match NV_ERROR_CONT_ERR_ID_STRING_PUBLIC size
 } NV_ERROR_CONT_ERR_ID;
 
 /*!
@@ -118,6 +120,18 @@ typedef struct _NV_ERROR_CONT_LOCATION_DRAM
 } NV_ERROR_CONT_LOCATION_DRAM;
 
 /*!
+ * Struct for CBC location
+ */
+typedef struct _NV_ERROR_CONT_LOCATION_CBC
+{
+    NvU32 ltcPart;
+    NvU32 slice;
+    NvU32 fbpaPart;
+    NvU32 fbpaSubloc;
+    NvU64 physicalAddress;
+} NV_ERROR_CONT_LOCATION_CBC;
+
+/*!
  * Struct for Engine id
  */
 typedef struct _NV_ERROR_CONT_LOCATION_ENG_ID
@@ -131,7 +145,8 @@ typedef struct _NV_ERROR_CONT_LOCATION_ENG_ID
  */
 typedef struct _NV_ERROR_CONT_LOCATION_SYSLTC
 {
-    NvU32 groupId;
+    NvU32 dieletType;
+    NvU32 dieletId;
     NvU32 instanceId;
     NvU32 slice;
 } NV_ERROR_CONT_LOCATION_SYSLTC;
@@ -146,7 +161,8 @@ typedef enum _NV_ERROR_CONT_LOCATION_TYPE
     NV_ERROR_CONT_LOCATION_TYPE_LTC    = 2, // LTC location
     NV_ERROR_CONT_LOCATION_TYPE_ENGINE = 3, // Engine location
     NV_ERROR_CONT_LOCATION_TYPE_VF     = 4, // VF location
-    NV_ERROR_CONT_LOCATION_TYPE_SYSLTC = 5  // SYSLTC location
+    NV_ERROR_CONT_LOCATION_TYPE_SYSLTC = 5, // SYSLTC location
+    NV_ERROR_CONT_LOCATION_TYPE_CBC    = 6  // CBC location
 } NV_ERROR_CONT_LOCATION_TYPE;
 
 /*!
@@ -155,6 +171,7 @@ typedef enum _NV_ERROR_CONT_LOCATION_TYPE
 typedef union _NV_ERROR_CONT_LOCATION_INFO
 {
     NV_ERROR_CONT_LOCATION_DRAM   dramLoc;   // DRAM location
+    NV_ERROR_CONT_LOCATION_CBC    cbcLoc;    // CBC location
     NV_ERROR_CONT_LOCATION_LTC    ltcLoc;    // LTC location
     NV_ERROR_CONT_LOCATION_ENG_ID engineLoc; // Engine location
     NvU32                         vfGfid;    // VF location
@@ -206,6 +223,7 @@ typedef struct _NV_ERROR_CONT_LOCATION
                                             "SYSLTC Data",       \
                                             "SYSLTC Tag",        \
                                             "SYSLTC CBC",        \
-                                            "SYSLTC Data Fatal"}
+                                            "SYSLTC Data Fatal", \
+                                            "LRC"}
 
 #endif // _ERROR_CONT_H_

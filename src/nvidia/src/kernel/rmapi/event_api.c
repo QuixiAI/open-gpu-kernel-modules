@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -176,9 +176,9 @@ eventapiConstruct_IMPL
             // convert a user event handle to its kernel equivalent.
             if (privLevel <= RS_PRIV_LEVEL_USER_ROOT)
             {
-                rmStatus = osUserHandleToKernelPtr(pRsClient->hClient,
-                                                   pNv0050AllocParams->data,
-                                                   &pNv0050AllocParams->data);
+                rmStatus = osGetAndRefEventFromUserHandle(pRsClient->hClient,
+                                                           pNv0050AllocParams->data,
+                                                           &pNv0050AllocParams->data);
                 if (rmStatus == NV_OK)
                     bUserOsEventHandle = NV_TRUE;
             }
@@ -378,29 +378,38 @@ eventapiInit_IMPL
         rmStatus = serverGetClientUnderLock(&g_resServ, hNotifierClient, &pNotifierClient);
         if (rmStatus != NV_OK)
             return rmStatus;
+
+        if (pResourceRef->externalClassId == NV01_EVENT_OS_EVENT)
+        {
+            rmStatus = clientValidate(pNotifierClient, &pCallContext->secInfo);
+            if (rmStatus != NV_OK)
+                return rmStatus;
+        }
     }
     else
     {
         pNotifierClient = pRsClient;
     }
 
-    if (pNotifierClient != NULL)
-    {
-        RsResourceRef *pNotifierRef;
-        INotifier *pNotifier;
-        if (clientGetResourceRef(pNotifierClient, hNotifierResource, &pNotifierRef) != NV_OK)
-            return NV_ERR_INVALID_OBJECT;
+    if (pNotifierClient == NULL)
+        return NV_ERR_INVALID_CLIENT;
 
-        pNotifier = dynamicCast(pNotifierRef->pResource, INotifier);
-        if (pNotifier == NULL)
-            return NV_ERR_INVALID_OBJECT;
+    RsResourceRef *pNotifierRef;
+    INotifier *pNotifier;
+    if (clientGetResourceRef(pNotifierClient, hNotifierResource, &pNotifierRef) != NV_OK)
+        return NV_ERR_INVALID_OBJECT;
 
-        rmStatus = inotifyGetOrAllocNotifShare(pNotifier, hNotifierClient, hNotifierResource, &pNotifierShare);
-        if (rmStatus != NV_OK)
-            return rmStatus;
+    pNotifier = dynamicCast(pNotifierRef->pResource, INotifier);
+    if (pNotifier == NULL)
+        return NV_ERR_INVALID_OBJECT;
 
-        *pppEventNotification = inotifyGetNotificationListPtr(pNotifierShare->pNotifier);
-    }
+    rmStatus = inotifyGetOrAllocNotifShare(pNotifier, hNotifierClient, hNotifierResource, &pNotifierShare);
+    if (rmStatus != NV_OK)
+        return rmStatus;
+    if (pNotifierShare->pNotifier == NULL)
+        return NV_ERR_INVALID_OBJECT;
+
+    *pppEventNotification = inotifyGetNotificationListPtr(pNotifierShare->pNotifier);
 
     serverRefShare(&g_resServ, staticCast(pNotifierShare, RsShared));
     pEvent->pNotifierShare = pNotifierShare;

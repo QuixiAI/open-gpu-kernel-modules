@@ -116,6 +116,11 @@ void __nvoc_init_halspec_ChipHal(ChipHal *pChipHal, NvU32 arch, NvU32 impl, NvU3
     {
         pChipHal->__nvoc_HalVarIdx = 61;
     }
+    // GB10C
+    else if(arch == 0x1A && impl == 0xC)
+    {
+        pChipHal->__nvoc_HalVarIdx = 62;
+    }
     // GB110
     else if(arch == 0x1A && impl == 0x3)
     {
@@ -164,19 +169,19 @@ void __nvoc_init_halspec_ChipHal(ChipHal *pChipHal, NvU32 arch, NvU32 impl, NvU3
     // GR100
     else if(arch == 0x1C && impl == 0x0)
     {
-        pChipHal->__nvoc_HalVarIdx = 76;
+        pChipHal->__nvoc_HalVarIdx = 77;
     }
     // GR102
     else if(arch == 0x1C && impl == 0x2)
     {
-        pChipHal->__nvoc_HalVarIdx = 77;
+        pChipHal->__nvoc_HalVarIdx = 78;
     }
     // T234D
     else if(arch == 0x0 && impl == 0x0 && hidrev == 0x235)
     {
         pChipHal->__nvoc_HalVarIdx = 109;
     }
-    // T239D
+    // T238D
     else if(arch == 0x0 && impl == 0x0 && hidrev == 0x23B)
     {
         pChipHal->__nvoc_HalVarIdx = 110;

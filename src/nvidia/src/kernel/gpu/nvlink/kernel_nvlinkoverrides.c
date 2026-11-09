@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -58,7 +58,7 @@ knvlinkApplyRegkeyOverrides_IMPL
 
     // Link enable/disable filtering
     pKernelNvlink->bRegistryLinkOverride   = NV_FALSE;
-    pKernelNvlink->registryLinkMask        = 0;
+    bitVectorClrAll(&pKernelNvlink->registryLinkMask);
     bitVectorClrAll(&pKernelNvlink->vbiosDisabledLinkMask);
     bitVectorClrAll(&pKernelNvlink->regkeyDisabledLinksMask);
     // Clock and speed settings
@@ -218,10 +218,12 @@ knvlinkApplyRegkeyOverrides_IMPL
     if (NV_OK == osReadRegistryDword(pGpu,
                 NV_REG_STR_RM_NVLINK_ENABLE, &regdata))
     {
-        pKernelNvlink->registryLinkMask = regdata;
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+            convertMaskToBitVector(regdata, &pKernelNvlink->registryLinkMask));
         pKernelNvlink->bRegistryLinkOverride = NV_TRUE;
-        NV_PRINTF(LEVEL_INFO, "Enable NvLinks 0x%llx via regkey\n",
-                  pKernelNvlink->registryLinkMask);
+        NV_BITVECTOR_PRINT(
+            NV_PRINTF(LEVEL_INFO, "Enable NvLinks via regkey\n"),
+            &pKernelNvlink->registryLinkMask);
     }
 
     // Registry overrides for disabling nvlink P2P loopback
@@ -286,35 +288,36 @@ knvlinkApplyRegkeyOverrides_IMPL
         }
     }
 
-    // Registry override to enable/disable nvlink encryption with CC
-    if (NV_OK == osReadRegistryDword(pGpu, NV_REG_STR_RM_NVLINK_ENCRYPTION_WITH_CC, &regdata))
+    //
+    // ConfidentialCompute is constructed before KernelNvlink. Enable encryption
+    // with CC when its resolved mode requires multi-GPU NVLE, while retaining
+    // the per-chip default for CC-off standalone mode. Apply overrides below.
+    //
+    if (gpuIsCCFeatureEnabled(pGpu) && gpuIsCCMultiGpuNvleModeEnabled(pGpu))
     {
-        if (FLD_TEST_DRF(_REG_STR_RM, _NVLINK_ENCRYPTION_WITH_CC, _MODE, _ENABLE, regdata))
-        {
-            pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC, NV_TRUE);
-            NV_PRINTF(LEVEL_INFO, "Nvlink Encryption with CC is enabled via regkey\n");
-        }
-        else
-        {
-            pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC, NV_FALSE);
-            NV_PRINTF(LEVEL_INFO, "Nvlink Encryption with CC is disabled via regkey\n");
-        }
+        pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC, NV_TRUE);
     }
 
     // Registry override to enable/disable nvlink encryption
     if (NV_OK == osReadRegistryDword(pGpu, NV_REG_STR_RM_NVLINK_ENCRYPTION, &regdata))
     {
-        NvBool bCCFeatureEnabled   = NV_FALSE;
-        NvBool nvleModeEnabled     = FLD_TEST_DRF(_REG_STR_RM, _NVLINK_ENCRYPTION, _MODE, _ENABLE, regdata);
-        NvBool nvleQualModeEnabled = FLD_TEST_DRF(_REG_STR_RM, _NVLINK_ENCRYPTION, _QUAL_MODE, _ENABLE, regdata);
+        NvBool bCCFeatureEnabled    = NV_FALSE;
+        NvBool nvleModeEnabled      = FLD_TEST_DRF(_REG_STR_RM, _NVLINK_ENCRYPTION, _MODE, _ENABLE, regdata);
+        NvBool nvleQualModeEnabled  = FLD_TEST_DRF(_REG_STR_RM, _NVLINK_ENCRYPTION, _QUAL_MODE, _ENABLE, regdata);
+        NvBool nvleSelectiveEnabled = FLD_TEST_DRF(_REG_STR_RM, _NVLINK_ENCRYPTION, _SELECTIVE, _ENABLE, regdata);
 
-        ConfidentialCompute *pCC = GPU_GET_CONF_COMPUTE(pGpu);
-        bCCFeatureEnabled        = (pCC != NULL) && pCC->getProperty(pCC, PDB_PROP_CONFCOMPUTE_ENABLED);
+        bCCFeatureEnabled           = gpuIsCCFeatureEnabled(pGpu);
 
-        // Both the modes should not be enabled together
+        // The modes should not be enabled together
         if (nvleModeEnabled && nvleQualModeEnabled)
         {
             NV_PRINTF(LEVEL_ERROR, "NVLE mode and NVLE Qual mode cannot be enabled together using regkey\n");
+            return NV_ERR_NOT_SUPPORTED;
+        }
+
+        if (nvleSelectiveEnabled && !nvleModeEnabled)
+        {
+            NV_PRINTF(LEVEL_ERROR, "NVLE Selective Encryption should be enabled only with NVLE mode\n");
             return NV_ERR_NOT_SUPPORTED;
         }
 
@@ -337,30 +340,56 @@ knvlinkApplyRegkeyOverrides_IMPL
             }
             else
             {
-                // If NVLE needs to be enabled with CC, check if CC is enabled
-                if (pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC))
+                NvBool bTdispEnabled = NV_FALSE;
+
+                bTdispEnabled = gpuIsTdispFeatureEnabled(pGpu);
+
+                if (bCCFeatureEnabled || bTdispEnabled)
                 {
-                    if (bCCFeatureEnabled)
+                    // TDISP NVLE is independent of the encryption-with-CC policy.
+                    if (bTdispEnabled ||
+                        pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC))
                     {
                         pKernelNvlink->bNvleModeRegkey = NV_REG_STR_RM_NVLINK_ENCRYPTION_MODE_ENABLE;
                         pKernelNvlink->gspProxyRegkeys = DRF_DEF(GSP, _PROXY_REG, _NVLINK_ENCRYPTION, _ENABLE);
                         pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED, NV_TRUE);
-                        NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is enabled with CC via regkey\n");
+                        NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is enabled with CC or TDISP via regkey\n");
+                    }
+                    else
+                    {
+                        NV_PRINTF(LEVEL_INFO, "Nvlink Encryption regkey ignored because encryption with CC is disabled\n");
+                    }
+                }
+                else if (gpuIsBaremetalSecureAiEnabled(pGpu))
+                {
+                    {
+                        pKernelNvlink->bNvleModeRegkey = NV_REG_STR_RM_NVLINK_ENCRYPTION_MODE_ENABLE;
+                        pKernelNvlink->gspProxyRegkeys = DRF_DEF(GSP, _PROXY_REG, _NVLINK_ENCRYPTION, _ENABLE);
+                        pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED, NV_TRUE);
+                        NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is enabled with BMSAI via regkey\n");
                     }
                 }
                 else
                 {
-                    pKernelNvlink->bNvleModeRegkey = NV_REG_STR_RM_NVLINK_ENCRYPTION_MODE_ENABLE;
-                    pKernelNvlink->gspProxyRegkeys = DRF_DEF(GSP, _PROXY_REG, _NVLINK_ENCRYPTION, _ENABLE);
-                    pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED, NV_TRUE);
-                    NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is enabled via regkey\n");
+                    if (knvlinkIsNvleStandaloneModeEnabled(pGpu, pKernelNvlink))
+                    {
+                        pKernelNvlink->bNvleModeRegkey = NV_REG_STR_RM_NVLINK_ENCRYPTION_MODE_ENABLE;
+                        pKernelNvlink->gspProxyRegkeys = DRF_DEF(GSP, _PROXY_REG, _NVLINK_ENCRYPTION, _ENABLE);
+                        pKernelNvlink->gspProxyRegkeys |= DRF_DEF(GSP, _PROXY_REG, _NVLINK_ENCRYPTION_STANDALONE, _ENABLE);
+                        pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED, NV_TRUE);
+                        NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is enabled in standalone mode\n");
+                    }
+                    else
+                    {
+                        NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is disabled by default\n");
+                    }
                 }
             }
         }
         else if (nvleQualModeEnabled)
         {
             pKernelNvlink->bNvleQualModeRegkey = NV_REG_STR_RM_NVLINK_ENCRYPTION_QUAL_MODE_ENABLE;
-            pKernelNvlink->gspProxyRegkeys     = DRF_DEF(GSP, _PROXY_REG, _NVLINK_ENCRYPTION, _ENABLE);
+            pKernelNvlink->gspProxyRegkeys     = DRF_DEF(GSP, _PROXY_REG, _NVLINK_ENCRYPTION_QUAL_MODE, _ENABLE);
             pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED, NV_TRUE);
             NV_PRINTF(LEVEL_INFO, "Nvlink Encryption Qual mode is enabled via regkey\n");
         }
@@ -368,6 +397,13 @@ knvlinkApplyRegkeyOverrides_IMPL
         {
             // Nvlink encryption is disabled through regkey
             NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is disabled via regkey\n");
+        }
+
+        if (nvleSelectiveEnabled &&
+            pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED))
+        {
+            pKernelNvlink->gspProxyRegkeys |= DRF_DEF(GSP, _PROXY_REG, _NVLINK_ENCRYPTION_SELECTIVE, _ENABLE);
+            NV_PRINTF(LEVEL_INFO, "Nvlink Selective Encryption is enabled via regkey\n");
         }
     }
     else
@@ -380,28 +416,57 @@ knvlinkApplyRegkeyOverrides_IMPL
         else
         {
             NvBool bCCFeatureEnabled = NV_FALSE;
+            NvBool bTdispEnabled     = NV_FALSE;
 
             // Nvlink encryption is default enabled on non-MODS platforms if CC is enabled
             pKernelNvlink->bNvleModeRegkey = NV_REG_STR_RM_NVLINK_ENCRYPTION_MODE_DEFAULT;
 
-            // Enable NVLink encryption if CC is enabled
-            ConfidentialCompute *pCC = GPU_GET_CONF_COMPUTE(pGpu);
-            bCCFeatureEnabled = (pCC != NULL) && pCC->getProperty(pCC, PDB_PROP_CONFCOMPUTE_ENABLED);
+            // Enable NVLink encryption if Bounce-buffer CC is enabled
+            bCCFeatureEnabled = gpuIsCCFeatureEnabled(pGpu);
 
-            // If NVLE needs to be enabled with CC, check if CC is enabled
-            if (pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC))
+            bTdispEnabled = gpuIsTdispFeatureEnabled(pGpu);
+
+            if (bCCFeatureEnabled || bTdispEnabled)
             {
-                if (bCCFeatureEnabled && !gpuIsCCMultiGpuProtectedPcieModeEnabled(pGpu))
+                // TDISP NVLE is independent of the encryption-with-CC policy.
+                if ((bTdispEnabled ||
+                     pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC)) &&
+                    !gpuIsCCMultiGpuProtectedPcieModeEnabled(pGpu))
                 {
                     pKernelNvlink->bNvleModeRegkey = NV_REG_STR_RM_NVLINK_ENCRYPTION_MODE_ENABLE;
                     pKernelNvlink->gspProxyRegkeys = DRF_DEF(GSP, _PROXY_REG, _NVLINK_ENCRYPTION, _ENABLE);
                     pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED, NV_TRUE);
-                    NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is enabled by default because CC is enabled\n");
+                    NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is enabled by default because CC or TDISP is enabled\n");
                 }
                 else
                 {
-                    NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is disabled by default because CC is disabled\n");
+                    NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is disabled by default with CC or TDISP\n");
                 }
+            }
+            else if (gpuIsBaremetalSecureAiEnabled(pGpu))
+            {
+                {
+                    pKernelNvlink->bNvleModeRegkey = NV_REG_STR_RM_NVLINK_ENCRYPTION_MODE_ENABLE;
+                    pKernelNvlink->gspProxyRegkeys = DRF_DEF(GSP, _PROXY_REG, _NVLINK_ENCRYPTION, _ENABLE);
+                    pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED, NV_TRUE);
+                    NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is enabled because NVLE is enabled in HW under BMSAI\n");
+                }
+            }
+            //
+            // If NVLE standalone mode is enabled, enable NVLE encryption.
+            // If the knvlinkIsNvleStandaloneModeEnabled is true,
+            // then it already verifies the PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC is false.
+            //
+            else if (knvlinkIsNvleStandaloneModeEnabled(pGpu, pKernelNvlink))
+            {
+                pKernelNvlink->bNvleModeRegkey = NV_REG_STR_RM_NVLINK_ENCRYPTION_MODE_ENABLE;
+                pKernelNvlink->gspProxyRegkeys = DRF_DEF(GSP, _PROXY_REG, _NVLINK_ENCRYPTION_STANDALONE, _ENABLE);
+                pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED, NV_TRUE);
+                NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is enabled in standalone mode because NVLE is enabled in HW\n");
+            }
+            else
+            {
+                NV_PRINTF(LEVEL_INFO, "Nvlink Encryption is disabled by default because CC is disabled\n");
             }
         }
     }
@@ -454,6 +519,7 @@ knvlinkApplyRegkeyOverrides_IMPL
     }
 
     pKernelNvlink->bRemapTableLockDisable = NV_FALSE;
+    pKernelNvlink->bDisableNonDisruptiveLinkMask = NV_REG_STR_RM_NVLINK_DISABLE_NON_DISRUPTIVE_LINK_MASK_DEFAULT;
 
     // ABM settings
     if (NV_OK == osReadRegistryDword(pGpu, NV_REG_STR_RM_NVLINK_ADAPTIVE_BW_MODE, &regdata))
@@ -468,10 +534,21 @@ knvlinkApplyRegkeyOverrides_IMPL
             NV_PRINTF(LEVEL_INFO, "Adaptive Bandwidth Mode (ABM) enabled via regkey\n");
             pKernelNvlink->bAbmEnabled = NV_TRUE;
         }
+
+        if (FLD_TEST_DRF(_REG_STR_RM, _NVLINK_ADAPTIVE_BW_MODE, _TRAFFIC_QUIESCE, _ENABLE, regdata))
+        {
+            NV_PRINTF(LEVEL_INFO, "Traffic Quiesce enabled via regkey\n");
+            pKernelNvlink->bTrafficQuiesceEnable = NV_TRUE;
+        }
+        else
+        {
+            pKernelNvlink->bTrafficQuiesceEnable = NV_FALSE;
+        }
     }
     else
     {
         pKernelNvlink->bAbmEnabled = NV_REG_STR_RM_NVLINK_ADAPTIVE_BW_MODE_ENABLE_DEFAULT;
+        pKernelNvlink->bTrafficQuiesceEnable = NV_REG_STR_RM_NVLINK_ADAPTIVE_BW_MODE_TRAFFIC_QUIESCE_DEFAULT;
 
         if (pKernelNvlink->bAbmEnabled == NV_REG_STR_RM_NVLINK_ADAPTIVE_BW_MODE_ENABLE_YES)
         {
@@ -481,15 +558,57 @@ knvlinkApplyRegkeyOverrides_IMPL
         {
             NV_PRINTF(LEVEL_INFO, "Adaptive Bandwidth Mode (ABM) disabled by default\n");
         }
+
+        if (pKernelNvlink->bTrafficQuiesceEnable == NV_REG_STR_RM_NVLINK_ADAPTIVE_BW_MODE_TRAFFIC_QUIESCE_ENABLE)
+        {
+            NV_PRINTF(LEVEL_INFO, "Traffic Quiesce enabled by default\n");
+        }
+        else
+        {
+            NV_PRINTF(LEVEL_INFO, "Traffic Quiesce disabled by default\n");
+        }
     }
 
-    // Async RBM settings
-    pKernelNvlink->bAsyncRbmEnabled = NV_REG_STR_RM_NVLINK_ASYNC_RBM_ENABLE_DEFAULT;
-    if (NV_OK == osReadRegistryDword(pGpu, NV_REG_STR_RM_NVLINK_ASYNC_RBM, &regdata))
+    if (NV_OK == osReadRegistryDword(pGpu,
+                NV_REG_STR_RM_NVLINK_DISABLE_NON_DISRUPTIVE_LINK_MASK, &regdata) &&
+        regdata == NV_REG_STR_RM_NVLINK_DISABLE_NON_DISRUPTIVE_LINK_MASK_TRUE)
     {
-        pKernelNvlink->bAsyncRbmEnabled = FLD_TEST_DRF(_REG_STR_RM, _NVLINK_ASYNC_RBM, _ENABLE, _YES, regdata);
+        pKernelNvlink->bDisableNonDisruptiveLinkMask = NV_TRUE;
+        NV_PRINTF(LEVEL_INFO,
+                  "Non-disruptive link mask update disabled via regkey\n");
+    }
+
+    NV_PRINTF(LEVEL_INFO,
+              "bDisableNonDisruptiveLinkMask=%u\n",
+              pKernelNvlink->bDisableNonDisruptiveLinkMask);
+
+    // Async RBM settings
+    if (pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_ASYNC_RBM_SUPPORTED))
+    {
+        pKernelNvlink->bAsyncRbmEnabled = NV_REG_STR_RM_NVLINK_ASYNC_RBM_ENABLE_DEFAULT;
+        if (NV_OK == osReadRegistryDword(pGpu, NV_REG_STR_RM_NVLINK_ASYNC_RBM, &regdata))
+        {
+            pKernelNvlink->bAsyncRbmEnabled = FLD_TEST_DRF(_REG_STR_RM, _NVLINK_ASYNC_RBM, _ENABLE, _YES, regdata);
+        }
+    }
+    else
+    {
+        pKernelNvlink->bAsyncRbmEnabled = NV_FALSE;
     }
     NV_PRINTF(LEVEL_INFO, "Async RBM is %s by default\n", pKernelNvlink->bAsyncRbmEnabled ? "enabled" : "disabled");
+
+    if (pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_PTC_CLOCK_SUPPORTED))
+    {
+        // Registry override for the Nvlink PTC clock controls
+        if (NV_OK == osReadRegistryDword(pGpu, NV_REG_STR_RM_NVLINK_PTC_CLOCK_CONTROL, &regdata))
+        {
+            if (FLD_TEST_DRF(_REG_STR_RM, _NVLINK_PTC_CLOCK_CONTROL, _DISABLE, _YES, regdata))
+            {
+                NV_PRINTF(LEVEL_INFO, "Nvlink PTC clock is disabled via regkey\n");
+                pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_PTC_CLOCK_SUPPORTED, NV_FALSE);
+            }
+        }
+    }
 
     return NV_OK;
 }

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -29,6 +29,8 @@
 #include "resource_desc.h"
 #include "class/cl0071.h"
 #include "gpu/gpu_resource.h"
+#include "gpu/gpu.h"
+#include "kernel/gpu/gsp/gsp_trace_rats_macro.h"
 
 static NV_STATUS
 _RmDupObject

@@ -43,21 +43,13 @@ NV_STATUS __nvoc_down_thunk_ConfidentialCompute_engstateStatePostLoad(struct OBJ
 NV_STATUS __nvoc_down_thunk_ConfidentialCompute_engstateStatePreUnload(struct OBJGPU *pGpu, struct OBJENGSTATE *pConfCompute, NvU32 flags);    // this
 
 // Up-thunk(s) to bridge ConfidentialCompute methods to ancestors (if any)
-void __nvoc_up_thunk_OBJENGSTATE_confComputeInitMissing(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_confComputeStatePreInitUnlocked(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_confComputeStateInitUnlocked(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_confComputeStatePreLoad(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate, NvU32 arg3);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_confComputeStateLoad(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate, NvU32 arg3);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_confComputeStateUnload(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate, NvU32 arg3);    // this
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_confComputeStatePostUnload(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate, NvU32 arg3);    // this
-void __nvoc_up_thunk_OBJENGSTATE_confComputeStateDestroy(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate);    // this
-NvBool __nvoc_up_thunk_OBJENGSTATE_confComputeIsPresent(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate);    // this
 
 // Class-specific details for ConfidentialCompute
 const struct NVOC_CLASS_DEF __nvoc_class_def_ConfidentialCompute = 
 {
     .classInfo.size =               sizeof(ConfidentialCompute),
     .classInfo.classId =            classId(ConfidentialCompute),
+    .classInfo.visibility =         NVOC_EVENT_VISIBILITY_NONEVENT,
     .classInfo.providerId =         &__nvoc_rtti_provider,
 #if NV_PRINTF_STRINGS_ALLOWED
     .classInfo.name =               "ConfidentialCompute",
@@ -68,7 +60,7 @@ const struct NVOC_CLASS_DEF __nvoc_class_def_ConfidentialCompute =
 };
 
 
-// Metadata with per-class RTTI and vtable with ancestor(s)
+// Metadata with per-class RTTI with ancestor(s)
 static const struct NVOC_METADATA__ConfidentialCompute __nvoc_metadata__ConfidentialCompute = {
     .rtti.pClassDef = &__nvoc_class_def_ConfidentialCompute,    // (confCompute) this
     .rtti.dtor      = &__nvoc_dtor_ConfidentialCompute,
@@ -80,31 +72,21 @@ static const struct NVOC_METADATA__ConfidentialCompute __nvoc_metadata__Confiden
     .metadata__OBJENGSTATE.metadata__Object.rtti.dtor      = &__nvoc_destructFromBase,
     .metadata__OBJENGSTATE.metadata__Object.rtti.offset    = NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE.__nvoc_base_Object),
 
-    .vtable.__confComputeConstructEngine__ = &confComputeConstructEngine_IMPL,    // virtual override (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateConstructEngine__ = &__nvoc_down_thunk_ConfidentialCompute_engstateConstructEngine,    // virtual
-    .vtable.__confComputeStatePreInitLocked__ = &confComputeStatePreInitLocked_ac1694,    // virtual halified (singleton optimized) override (engstate) base (engstate) body
     .metadata__OBJENGSTATE.vtable.__engstateStatePreInitLocked__ = &__nvoc_down_thunk_ConfidentialCompute_engstateStatePreInitLocked,    // virtual
-    .vtable.__confComputeStateInitLocked__ = &confComputeStateInitLocked_IMPL,    // virtual override (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateInitLocked__ = &__nvoc_down_thunk_ConfidentialCompute_engstateStateInitLocked,    // virtual
     .metadata__OBJENGSTATE.vtable.__engstateStatePostLoad__ = &__nvoc_down_thunk_ConfidentialCompute_engstateStatePostLoad,    // virtual
     .metadata__OBJENGSTATE.vtable.__engstateStatePreUnload__ = &__nvoc_down_thunk_ConfidentialCompute_engstateStatePreUnload,    // virtual
-    .vtable.__confComputeInitMissing__ = &__nvoc_up_thunk_OBJENGSTATE_confComputeInitMissing,    // virtual inherited (engstate) base (engstate)
+    .metadata__OBJENGSTATE.vtable.__engstateConstructApertures__ = &engstateConstructApertures_IMPL,    // virtual
+    .metadata__OBJENGSTATE.vtable.__engstateDestructApertures__ = &engstateDestructApertures_IMPL,    // virtual
     .metadata__OBJENGSTATE.vtable.__engstateInitMissing__ = &engstateInitMissing_IMPL,    // virtual
-    .vtable.__confComputeStatePreInitUnlocked__ = &__nvoc_up_thunk_OBJENGSTATE_confComputeStatePreInitUnlocked,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePreInitUnlocked__ = &engstateStatePreInitUnlocked_IMPL,    // virtual
-    .vtable.__confComputeStateInitUnlocked__ = &__nvoc_up_thunk_OBJENGSTATE_confComputeStateInitUnlocked,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateInitUnlocked__ = &engstateStateInitUnlocked_IMPL,    // virtual
-    .vtable.__confComputeStatePreLoad__ = &__nvoc_up_thunk_OBJENGSTATE_confComputeStatePreLoad,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePreLoad__ = &engstateStatePreLoad_IMPL,    // virtual
-    .vtable.__confComputeStateLoad__ = &__nvoc_up_thunk_OBJENGSTATE_confComputeStateLoad,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateLoad__ = &engstateStateLoad_IMPL,    // virtual
-    .vtable.__confComputeStateUnload__ = &__nvoc_up_thunk_OBJENGSTATE_confComputeStateUnload,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateUnload__ = &engstateStateUnload_IMPL,    // virtual
-    .vtable.__confComputeStatePostUnload__ = &__nvoc_up_thunk_OBJENGSTATE_confComputeStatePostUnload,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStatePostUnload__ = &engstateStatePostUnload_IMPL,    // virtual
-    .vtable.__confComputeStateDestroy__ = &__nvoc_up_thunk_OBJENGSTATE_confComputeStateDestroy,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateStateDestroy__ = &engstateStateDestroy_IMPL,    // virtual
-    .vtable.__confComputeIsPresent__ = &__nvoc_up_thunk_OBJENGSTATE_confComputeIsPresent,    // virtual inherited (engstate) base (engstate)
     .metadata__OBJENGSTATE.vtable.__engstateIsPresent__ = &engstateIsPresent_IMPL,    // virtual
 };
 
@@ -123,17 +105,17 @@ const struct NVOC_CASTINFO __nvoc_castinfo__ConfidentialCompute = {
 
 // confComputeConstructEngine: virtual override (engstate) base (engstate)
 NV_STATUS __nvoc_down_thunk_ConfidentialCompute_engstateConstructEngine(struct OBJGPU *pGpu, struct OBJENGSTATE *pConfCompute, ENGDESCRIPTOR engDesc) {
-    return confComputeConstructEngine(pGpu, (struct ConfidentialCompute *)(((unsigned char *) pConfCompute) - NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)), engDesc);
+    return confComputeConstructEngine_IMPL(pGpu, (struct ConfidentialCompute *)(((unsigned char *) pConfCompute) - NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)), engDesc);
 }
 
 // confComputeStatePreInitLocked: virtual halified (singleton optimized) override (engstate) base (engstate) body
 NV_STATUS __nvoc_down_thunk_ConfidentialCompute_engstateStatePreInitLocked(struct OBJGPU *pGpu, struct OBJENGSTATE *pConfCompute) {
-    return confComputeStatePreInitLocked(pGpu, (struct ConfidentialCompute *)(((unsigned char *) pConfCompute) - NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)));
+    return confComputeStatePreInitLocked_ac1694(pGpu, (struct ConfidentialCompute *)(((unsigned char *) pConfCompute) - NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)));
 }
 
 // confComputeStateInitLocked: virtual override (engstate) base (engstate)
 NV_STATUS __nvoc_down_thunk_ConfidentialCompute_engstateStateInitLocked(struct OBJGPU *pGpu, struct OBJENGSTATE *pConfCompute) {
-    return confComputeStateInitLocked(pGpu, (struct ConfidentialCompute *)(((unsigned char *) pConfCompute) - NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)));
+    return confComputeStateInitLocked_IMPL(pGpu, (struct ConfidentialCompute *)(((unsigned char *) pConfCompute) - NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)));
 }
 
 // confComputeStatePostLoad: virtual halified (2 hals) override (engstate) base (engstate) body
@@ -144,54 +126,6 @@ NV_STATUS __nvoc_down_thunk_ConfidentialCompute_engstateStatePostLoad(struct OBJ
 // confComputeStatePreUnload: virtual halified (2 hals) override (engstate) base (engstate) body
 NV_STATUS __nvoc_down_thunk_ConfidentialCompute_engstateStatePreUnload(struct OBJGPU *pGpu, struct OBJENGSTATE *pConfCompute, NvU32 flags) {
     return confComputeStatePreUnload(pGpu, (struct ConfidentialCompute *)(((unsigned char *) pConfCompute) - NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)), flags);
-}
-
-
-// 9 up-thunk(s) defined to bridge methods in ConfidentialCompute to superclasses
-
-// confComputeInitMissing: virtual inherited (engstate) base (engstate)
-void __nvoc_up_thunk_OBJENGSTATE_confComputeInitMissing(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate) {
-    engstateInitMissing(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)));
-}
-
-// confComputeStatePreInitUnlocked: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_confComputeStatePreInitUnlocked(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate) {
-    return engstateStatePreInitUnlocked(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)));
-}
-
-// confComputeStateInitUnlocked: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_confComputeStateInitUnlocked(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate) {
-    return engstateStateInitUnlocked(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)));
-}
-
-// confComputeStatePreLoad: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_confComputeStatePreLoad(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate, NvU32 arg3) {
-    return engstateStatePreLoad(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-// confComputeStateLoad: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_confComputeStateLoad(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate, NvU32 arg3) {
-    return engstateStateLoad(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-// confComputeStateUnload: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_confComputeStateUnload(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate, NvU32 arg3) {
-    return engstateStateUnload(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-// confComputeStatePostUnload: virtual inherited (engstate) base (engstate)
-NV_STATUS __nvoc_up_thunk_OBJENGSTATE_confComputeStatePostUnload(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate, NvU32 arg3) {
-    return engstateStatePostUnload(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)), arg3);
-}
-
-// confComputeStateDestroy: virtual inherited (engstate) base (engstate)
-void __nvoc_up_thunk_OBJENGSTATE_confComputeStateDestroy(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate) {
-    engstateStateDestroy(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)));
-}
-
-// confComputeIsPresent: virtual inherited (engstate) base (engstate)
-NvBool __nvoc_up_thunk_OBJENGSTATE_confComputeIsPresent(struct OBJGPU *pGpu, struct ConfidentialCompute *pEngstate) {
-    return engstateIsPresent(pGpu, (struct OBJENGSTATE *)(((unsigned char *) pEngstate) + NV_OFFSETOF(ConfidentialCompute, __nvoc_base_OBJENGSTATE)));
 }
 
 
@@ -242,6 +176,7 @@ void __nvoc_init_dataField_ConfidentialCompute(ConfidentialCompute *pThis, RmHal
     pThis->setProperty(pThis, PDB_PROP_CONFCOMPUTE_ENABLED, NV_FALSE);
     pThis->setProperty(pThis, PDB_PROP_CONFCOMPUTE_CC_FEATURE_ENABLED, NV_FALSE);
     pThis->setProperty(pThis, PDB_PROP_CONFCOMPUTE_APM_FEATURE_ENABLED, NV_FALSE);
+    pThis->setProperty(pThis, PDB_PROP_CONFCOMPUTE_BM_SECURE_AI_ENABLED, NV_FALSE);
     pThis->setProperty(pThis, PDB_PROP_CONFCOMPUTE_DEVTOOLS_MODE_ENABLED, NV_FALSE);
     pThis->setProperty(pThis, PDB_PROP_CONFCOMPUTE_ENABLE_EARLY_INIT, NV_FALSE);
     pThis->setProperty(pThis, PDB_PROP_CONFCOMPUTE_GPUS_READY_CHECK_ENABLED, NV_TRUE);
@@ -346,8 +281,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     {
         pThis->__confComputeKeyStoreDeriveViaChannel__ = &confComputeKeyStoreDeriveViaChannel_ac1694;
     }
-    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeKeyStoreDeriveViaChannel__ = &confComputeKeyStoreDeriveViaChannel_GB100;
     }
@@ -362,8 +297,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     {
         pThis->__confComputeKeyStoreRetrieveViaChannel__ = &confComputeKeyStoreRetrieveViaChannel_GH100;
     }
-    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeKeyStoreRetrieveViaChannel__ = &confComputeKeyStoreRetrieveViaChannel_GB100;
     }
@@ -374,8 +309,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeKeyStoreRetrieveViaKeyId -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeKeyStoreRetrieveViaKeyId__ = &confComputeKeyStoreRetrieveViaKeyId_GH100;
     }
@@ -387,7 +322,7 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
 
     // confComputeDeriveSecretsForCEKeySpace -- halified (2 hals) body
     if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x04000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030feUL) )) /* ChipHal: GH100 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060feUL) )) /* ChipHal: GH100 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeDeriveSecretsForCEKeySpace__ = &confComputeDeriveSecretsForCEKeySpace_GH100;
     }
@@ -402,8 +337,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     {
         pThis->__confComputeDeriveInitialKeySeed__ = &confComputeDeriveInitialKeySeed_ac1694;
     }
-    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeDeriveInitialKeySeed__ = &confComputeDeriveInitialKeySeed_GB100;
     }
@@ -414,8 +349,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeGetAndUpdateCurrentKeySeed -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeGetAndUpdateCurrentKeySeed__ = &confComputeGetAndUpdateCurrentKeySeed_GB100;
     }
@@ -430,8 +365,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     {
         pThis->__confComputeDeriveSecrets__ = &confComputeDeriveSecrets_GH100;
     }
-    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeDeriveSecrets__ = &confComputeDeriveSecrets_GB100;
     }
@@ -442,8 +377,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeRotationNotifHandler -- halified (2 hals)
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeRotationNotifHandler__ = &confComputeRotationNotifHandler_GB100;
     }
@@ -454,8 +389,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeUpdateSecrets -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeUpdateSecrets__ = &confComputeUpdateSecrets_GH100;
     }
@@ -466,8 +401,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeUpdatePerChannelSecrets -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeUpdatePerChannelSecrets__ = &confComputeUpdatePerChannelSecrets_GB100;
     }
@@ -478,8 +413,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeIsSpdmSupported -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeIsSpdmSupported__ = &confComputeIsSpdmSupported_e661f0;
     }
@@ -494,8 +429,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     {
         pThis->__confComputeGetEngineIdFromKeySpace__ = &confComputeGetEngineIdFromKeySpace_GH100;
     }
-    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeGetEngineIdFromKeySpace__ = &confComputeGetEngineIdFromKeySpace_GB100;
     }
@@ -510,8 +445,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     {
         pThis->__confComputeGetKeySpaceFromKChannel__ = &confComputeGetKeySpaceFromKChannel_GH100;
     }
-    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeGetKeySpaceFromKChannel__ = &confComputeGetKeySpaceFromKChannel_GB100;
     }
@@ -526,8 +461,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     {
         pThis->__confComputeGetLceKeyIdFromKChannel__ = &confComputeGetLceKeyIdFromKChannel_GH100;
     }
-    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeGetLceKeyIdFromKChannel__ = &confComputeGetLceKeyIdFromKChannel_GB100;
     }
@@ -542,8 +477,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     {
         pThis->__confComputeGetMaxCeKeySpaceIdx__ = &confComputeGetMaxCeKeySpaceIdx_a3eb5b;
     }
-    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeGetMaxCeKeySpaceIdx__ = &confComputeGetMaxCeKeySpaceIdx_ca9aa5;
     }
@@ -554,8 +489,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeGlobalKeyIsKernelPriv -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeGlobalKeyIsKernelPriv__ = &confComputeGlobalKeyIsKernelPriv_GH100;
     }
@@ -566,8 +501,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeGlobalKeyIsUvmKey -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeGlobalKeyIsUvmKey__ = &confComputeGlobalKeyIsUvmKey_GH100;
     }
@@ -578,8 +513,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeGetKeyPairByChannel -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeGetKeyPairByChannel__ = &confComputeGetKeyPairByChannel_GH100;
     }
@@ -608,8 +543,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeGetKeyPairForKeySpace -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeGetKeyPairForKeySpace__ = &confComputeGetKeyPairForKeySpace_GH100;
     }
@@ -648,8 +583,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
         {
             pThis->__confComputeEnableKeyRotationSupport__ = &confComputeEnableKeyRotationSupport_GH100;
         }
-        else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-                 ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000000ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C */ 
+        else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+                 ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000000ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C */ 
         {
             pThis->__confComputeEnableKeyRotationSupport__ = &confComputeEnableKeyRotationSupport_GB100;
         }
@@ -679,8 +614,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeIsDebugModeEnabled -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000000ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeIsDebugModeEnabled__ = &confComputeIsDebugModeEnabled_GH100;
     }
@@ -695,8 +630,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     {
         pThis->__confComputeIsGpuCcCapable__ = &confComputeIsGpuCcCapable_GH100;
     }
-    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeIsGpuCcCapable__ = &confComputeIsGpuCcCapable_GB100;
     }
@@ -706,11 +641,15 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
         pThis->__confComputeIsGpuCcCapable__ = &confComputeIsGpuCcCapable_d69453;
     }
 
-    // confComputeTestPlatformSupport -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x00000001UL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 */ 
+    // confComputeTestPlatformSupport -- halified (3 hals) body
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x04000000UL) )) /* ChipHal: GH100 */ 
     {
         pThis->__confComputeTestPlatformSupport__ = &confComputeTestPlatformSupport_GH100;
+    }
+    else if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+             ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x00006001UL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GR100 | GR102 */ 
+    {
+        pThis->__confComputeTestPlatformSupport__ = &confComputeTestPlatformSupport_GB100;
     }
     // default
     else
@@ -730,8 +669,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeKeyStoreDepositIvMask -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeKeyStoreDepositIvMask__ = &confComputeKeyStoreDepositIvMask_GH100;
     }
@@ -742,8 +681,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeKeyStoreUpdateKey -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeKeyStoreUpdateKey__ = &confComputeKeyStoreUpdateKey_GH100;
     }
@@ -754,8 +693,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeKeyStoreIsValidGlobalKeyId -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeKeyStoreIsValidGlobalKeyId__ = &confComputeKeyStoreIsValidGlobalKeyId_GH100;
     }
@@ -766,8 +705,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeKeyStoreInit -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeKeyStoreInit__ = &confComputeKeyStoreInit_GH100;
     }
@@ -778,8 +717,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeKeyStoreDeinit -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeKeyStoreDeinit__ = &confComputeKeyStoreDeinit_GH100;
     }
@@ -790,8 +729,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeKeyStoreGetExportMasterKey -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeKeyStoreGetExportMasterKey__ = &confComputeKeyStoreGetExportMasterKey_GH100;
     }
@@ -802,8 +741,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeGetCurrentKeySeed -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xb8000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xf8000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeGetCurrentKeySeed__ = &confComputeGetCurrentKeySeed_GB100;
     }
@@ -814,8 +753,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeKeyStoreDeriveKey -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeKeyStoreDeriveKey__ = &confComputeKeyStoreDeriveKey_GH100;
     }
@@ -826,8 +765,8 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     }
 
     // confComputeKeyStoreClearExportMasterKey -- halified (2 hals) body
-    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xbc000000UL) ) ||
-        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000030ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
+    if (( ((chipHal_HalVarIdx >> 5) == 1UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0xfc000000UL) ) ||
+        ( ((chipHal_HalVarIdx >> 5) == 2UL) && ((1UL << (chipHal_HalVarIdx & 0x1f)) & 0x000060ffUL) )) /* ChipHal: GH100 | GB100 | GB102 | GB10B | GB10C | GB110 | GB112 | GB202 | GB203 | GB205 | GB206 | GB207 | GB20B | GB20C | GR100 | GR102 */ 
     {
         pThis->__confComputeKeyStoreClearExportMasterKey__ = &confComputeKeyStoreClearExportMasterKey_GH100;
     }
@@ -836,10 +775,10 @@ static void __nvoc_init_funcTable_ConfidentialCompute_1(ConfidentialCompute *pTh
     {
         pThis->__confComputeKeyStoreClearExportMasterKey__ = &confComputeKeyStoreClearExportMasterKey_d44104;
     }
-} // End __nvoc_init_funcTable_ConfidentialCompute_1 with approximately 94 basic block(s).
+} // End __nvoc_init_funcTable_ConfidentialCompute_1 with approximately 95 basic block(s).
 
 
-// Initialize vtable(s) for 52 virtual method(s).
+// Initialize vtable(s) for 40 virtual method(s).
 void __nvoc_init_funcTable_ConfidentialCompute(ConfidentialCompute *pThis, RmHalspecOwner *pRmhalspecowner, GpuHalspecOwner *pGpuhalspecowner) {
 
     // Initialize vtable(s) with 40 per-object function pointer(s).

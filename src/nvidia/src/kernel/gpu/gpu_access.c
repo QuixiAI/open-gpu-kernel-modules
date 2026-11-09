@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -194,7 +194,10 @@ _regWriteUnicast
         return;
     }
 
-    gpuHandleWriteRegisterFilter(pGpu, deviceIndex, instance, addr, val, size, &flags, pThreadState, NV_FALSE);
+    if (gpuMappingHasRegisterFilters(pMapping))
+    {
+        gpuHandleWriteRegisterFilter(pGpu, deviceIndex, instance, addr, val, size, &flags, pThreadState, NV_FALSE);
+    }
 
     if (!(flags & REGISTER_FILTER_FLAGS_WRITE))
     {
@@ -281,9 +284,15 @@ ioaprtConstruct_IMPL
         // Check if the child Aperture strides beyond the parent's boundary.
         if ((length + offset) > pParentAperture->length)
         {
+            NvU64 childStartAddr  = (NvU64)pParentAperture->baseAddress + offset;
+            NvU64 childEndAddr    = childStartAddr + length - 1;
+            NvU64 parentStartAddr = pParentAperture->baseAddress;
+            NvU64 parentEndAddr   = parentStartAddr + pParentAperture->length - 1;
+
             NV_PRINTF(LEVEL_WARNING,
-                "Child aperture crosses parent's boundary, length 0x%llx offset 0x%x, Parent's length 0x%llx\n",
-                length, offset, pParentAperture->length);
+                "Child aperture [0x%08llx, 0x%08llx] (length: 0x%08llx) crosses parent's boundary [0x%08llx, 0x%08llx] (length: 0x%08llx)\n",
+                childStartAddr, childEndAddr, length,
+                parentStartAddr, parentEndAddr, pParentAperture->length);
         }
 
     }
@@ -346,8 +355,11 @@ ioaprtWriteRegUnicast
             return;
         }
 
-        gpuHandleWriteRegisterFilter(pGpu, deviceIndex, instance, regAddr,
-                                      val, size, &flags, NULL, NV_TRUE);
+        if (gpuMappingHasRegisterFilters(pMapping))
+        {
+            gpuHandleWriteRegisterFilter(pGpu, deviceIndex, instance, regAddr,
+                                          val, size, &flags, NULL, NV_TRUE);
+        }
     }
 
     if (!(flags & REGISTER_FILTER_FLAGS_WRITE))
@@ -529,8 +541,11 @@ ioaprtReadReg
             return (~0);
         }
 
-        returnValue = gpuHandleReadRegisterFilter(pGpu, deviceIndex, instance,
-                                                   regAddr, size, &flags, NULL, NV_TRUE);
+        if (gpuMappingHasRegisterFilters(pMapping))
+        {
+            returnValue = gpuHandleReadRegisterFilter(pGpu, deviceIndex, instance,
+                                                       regAddr, size, &flags, NULL, NV_TRUE);
+        }
     }
 
     if (!(flags & REGISTER_FILTER_FLAGS_READ))
@@ -648,8 +663,11 @@ _regRead
     if (status != NV_OK)
         return returnValue;
 
-    returnValue = gpuHandleReadRegisterFilter(pGpu, deviceIndex, instance,
-                                               addr, size, &flags, pThreadState, NV_FALSE);
+    if (gpuMappingHasRegisterFilters(pMapping))
+    {
+        returnValue = gpuHandleReadRegisterFilter(pGpu, deviceIndex, instance,
+                                                   addr, size, &flags, pThreadState, NV_FALSE);
+    }
 
     if (!(flags & REGISTER_FILTER_FLAGS_READ))
     {
@@ -850,7 +868,7 @@ _gpuEnablePciMemSpaceAndCheckPmcBoot0Match
     }
 
     // Check PMC_ENABLE to make sure that it matches
-    pmcBoot0 = GPU_REG_RD32(pGpu, NV_PMC_BOOT_0);
+    pmcBoot0 = GPU_REG_RD32(pGpu, gpuGetPmcBoot0Addr_HAL(pGpu));
     if (pmcBoot0 == pGpu->chipId0)
     {
        return NV_TRUE;
@@ -1253,12 +1271,12 @@ gpuVerifyExistence_IMPL
     OBJGPU *pGpu
 )
 {
-    NvU32 regVal = GPU_REG_RD32(pGpu, NV_PMC_BOOT_0);
+    NvU32 regVal = GPU_REG_RD32(pGpu, gpuGetPmcBoot0Addr_HAL(pGpu));
 
     if (regVal != pGpu->chipId0)
     {
         osHandleGpuLost(pGpu, NV_TRUE);
-        regVal = GPU_REG_RD32(pGpu, NV_PMC_BOOT_0);
+        regVal = GPU_REG_RD32(pGpu, gpuGetPmcBoot0Addr_HAL(pGpu));
         if (regVal != pGpu->chipId0)
         {
             return NV_ERR_GPU_IS_LOST;
@@ -1301,7 +1319,7 @@ gpuSanityCheckRegRead_IMPL
                     //
                     // The result looks suspicious, let's check if the GPU is still attached.
                     //
-                    NvU32 testValue = osGpuReadReg032(pGpu, NV_PMC_BOOT_0);
+                    NvU32 testValue = osGpuReadReg032(pGpu, gpuGetPmcBoot0Addr_HAL(pGpu));
                     if (testValue == GPU_REG_VALUE_INVALID)
                     {
                         osHandleGpuLost(pGpu, NV_TRUE);
@@ -1318,7 +1336,7 @@ gpuSanityCheckRegRead_IMPL
                     //
                     // The result looks suspicious, let's check if the GPU is still attached.
                     //
-                    NvU32 testValue = osGpuReadReg032(pGpu, NV_PMC_BOOT_0);
+                    NvU32 testValue = osGpuReadReg032(pGpu, gpuGetPmcBoot0Addr_HAL(pGpu));
                     if (testValue == GPU_REG_VALUE_INVALID)
                     {
                         osHandleGpuLost(pGpu, NV_TRUE);
@@ -1335,7 +1353,7 @@ gpuSanityCheckRegRead_IMPL
                     //
                     // The result looks suspicious, let's check if the GPU is still attached.
                     //
-                    NvU32 testValue = osGpuReadReg032(pGpu, NV_PMC_BOOT_0);
+                    NvU32 testValue = osGpuReadReg032(pGpu, gpuGetPmcBoot0Addr_HAL(pGpu));
                     if (testValue == GPU_REG_VALUE_INVALID)
                     {
                         osHandleGpuLost(pGpu, NV_TRUE);
@@ -1428,8 +1446,23 @@ swbcaprtReadReg32_IMPL
 
 #if defined(DEBUG)
     NvU32 i;
+    NvBool bMismatchFound = NV_FALSE;
+
     for (i = 1; i < pAperture->numApertures; i++)
-        NV_ASSERT(REG_RD32(&pAperture->pApertures[i], addr) == val);
+    {
+        NvU32 reg = REG_RD32(&pAperture->pApertures[i], addr);
+        if (reg != val)
+        {
+            NV_PRINTF(LEVEL_ERROR, "swbcaprtRead mismatch(offset=0x%08x): 0x%08x@0x%08x != 0x%08x@0x%08x (instance %d)\n",
+                addr, val, REG_GET_ADDR(&pAperture->pApertures[0], addr),
+                reg, REG_GET_ADDR(&pAperture->pApertures[i], addr), i);
+            bMismatchFound = NV_TRUE;
+        }
+    }
+
+    if (bMismatchFound)
+            PORT_DUMP_STACK();
+
 #endif // defined(DEBUG)
 
     return val;

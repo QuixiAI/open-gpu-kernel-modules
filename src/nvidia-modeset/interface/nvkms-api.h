@@ -38,10 +38,7 @@
  *
  * The NVKMS API is organized into several objects:
  *
- * - A device, which corresponds to an RM device.  This can either be
- *   a single GPU, or multiple GPUs linked into SLI.  Each GPU is
- *   called a "subdevice".  The subdevices used by an NVKMS device are
- *   reported in NvKmsAllocDeviceReply::subDeviceMask.
+ * - A device, which corresponds to an RM device.  This is always a single GPU.
  *
  *   A device is specified by a deviceHandle, returned by
  *   NVKMS_IOCTL_ALLOC_DEVICE.
@@ -221,7 +218,6 @@ enum NvKmsIoctlCommand {
     NVKMS_IOCTL_SET_CURSOR_IMAGE,
     NVKMS_IOCTL_MOVE_CURSOR,
     NVKMS_IOCTL_SET_LUT,
-    NVKMS_IOCTL_CHECK_LUT_NOTIFIER,
     NVKMS_IOCTL_IDLE_BASE_CHANNEL,
     NVKMS_IOCTL_FLIP,
     NVKMS_IOCTL_DECLARE_DYNAMIC_DPY_INTEREST,
@@ -317,7 +313,10 @@ enum NvKmsIoctlCommand {
  * Description of modetimings.
  *
  * YUV420 modes require special care since some GPUs do not support YUV420
- * scanout in hardware.  When timings::yuv420Mode is NV_YUV420_SW, NVKMS will
+ * scanout in hardware.  The decided YUV 4:2:0 disposition for a head is
+ * communicated through the NvKmsValidate{Mode,ModeIndex}Reply::yuv420Mode
+ * out parameter and the NvKmsSetModeOneHeadRequest::yuv420Mode{val,specified}
+ * sideband.  When the decided value is NV_YUV420_MODE_SW, NVKMS will
  * set a mode with horizontal values that are half of what are described in
  * NvKmsMode, and not enable any color space conversion.  When clients allocate
  * a surface and populate it with content, the region of interest within the
@@ -723,8 +722,21 @@ struct NvKmsChannelSyncObjects {
  * hardware value is used.
  */
 struct NvKmsFlipCommonParams {
-    
+
     NvBool allowVrr;
+
+    /*
+     * Target refresh rate (Hz) + divider, target raster height to use when
+     * current VRR mode is VRR_TYPE_MEDIA; ignored otherwise. If targetVTotal
+     * is non-zero, it takes precedence over the target refresh rate/divider.
+     * The main use case for this option is for DP AdaptiveSync CTS.
+     * 
+     * Otherwise, the target refresh rate/divider is used. If targetRefreshRateDivider
+     * is set, then the TRR is divided by 1.001.
+     */
+    NvU16 targetVTotal;
+    NvU16 targetRefreshRate;
+    NvBool targetRefreshRateDivider;
 
     struct {
         NvBool specified;
@@ -792,8 +804,45 @@ struct NvKmsFlipCommonParams {
 
     struct {
         NvBool specified;
+        /*!
+         * Note that “specified” serves to mark the field as being changed in
+         * this flip request, rather than as specified for this frame. So to
+         * disable VSIF metadata, set hdmiVsifMetadata.specified = TRUE
+         * and hdmiVsifMetadata.vsifMetadata.payloadSize = 0;
+         * To enable VSIF metadata, set hdmiVsifMetadata.specified = TRUE
+         * and hdmiVsifMetadata.vsifMetadata.payloadSize in the range of
+         * [NVKMS_HDMI_VSIF_METADATA_MIN_PAYLOAD_SIZE,
+         *  NVKMS_HDMI_VSIF_METADATA_MAX_PAYLOAD_SIZE] or [3, 27].
+         */
+        struct NvKmsHdmiVsifMetadata vsifMetadata;
+    } hdmiVsifMetadata;
+
+    /*
+     * ALLM (Auto Low Latency Mode) enable mode for HDMI 2.1 displays.
+     * When specified, controls the ALLM bit in the HF-VSIF infoframe.
+     *   OFF     : ALLM bit = 0 always
+     *   DYNAMIC : ALLM bit follows VRR active state (driver managed)
+     *   ON      : ALLM bit = 1 always (requires EDID ALLM capability)
+     */
+    struct {
+        NvBool specified;
+        enum NvKmsAllmMode mode;
+    } allmMode;
+
+    struct {
+        NvBool specified;
         enum NvKmsOutputColorimetry val;
     } colorimetry;
+
+    /*
+     * When enabled, configures all post-comp color pipeline blocks to
+     * "passthrough" the input pixels untouched. Passes through the OCSC0,
+     * OLUT, OCSC1, and the post-comp scaler.
+     */
+    struct {
+        NvBool specified;
+        NvBool enabled;
+    } postcompColorPassthrough;
 
     struct {
         NvBool specified;
@@ -808,10 +857,6 @@ struct NvKmsFlipCommonParams {
             NvBool specified;
         } surface;
 
-        /*
-         * sizeIn/sizeOut can be used when
-         * NvKmsAllocDeviceReply::layerCaps[layer].supportsWindowMode is TRUE.
-         */
         struct {
             struct NvKmsSize val;
             NvBool specified;
@@ -826,9 +871,6 @@ struct NvKmsFlipCommonParams {
          * Set the position of the layer, relative to the upper left
          * corner of the surface. This controls the same state as
          * NVKMS_IOCTL_SET_LAYER_POSITION.
-         *
-         * This field can be used when
-         * NvKmsAllocDeviceReply::layerCaps[layer].supportsWindowMode is TRUE.
          */
         struct {
             struct NvKmsSignedPoint val;
@@ -925,6 +967,7 @@ struct NvKmsFlipCommonParams {
             NvBool specified;
             NvBool enabled;
             struct NvKmsLUTSurfaceParams lut;
+            NvBool satCorrEnable;
         } tmo;
 
         /*
@@ -1028,6 +1071,18 @@ struct NvKmsFlipCommonParams {
             NvBool enabled;
             NvBool specified;
         } csc11Override;
+
+        /*
+         * When enabled, configures all pre-comp color pipeline blocks to
+         * "passthrough" the input pixels untouched. Passes through the FMT,
+         * ILUT, CSC00, CSC0, CSC0LUT, CSC10, pre-comp scaler, tone mapper,
+         * CSC10, CSC1LUT, and CSC11 color pipeline blocks. Also disables the
+         * compositor, and requires overlay layers to be disabled.
+         */
+        struct {
+            NvBool specified;
+            NvBool enabled;
+        } precompColorPassthrough;
     } layer[NVKMS_MAX_LAYERS_PER_HEAD];
 };
 
@@ -1134,12 +1189,6 @@ struct NvKmsAllocDeviceReply {
      */
     NvKmsDeviceHandle deviceHandle;
 
-    /*!
-     * A bitmask, indicating the GPUs, one per bit, contained by this
-     * device.
-     */
-    NvU32 subDeviceMask;
-
     /*! The number of heads on each disp. */
     NvU32 numHeads;
 
@@ -1166,6 +1215,15 @@ struct NvKmsAllocDeviceReply {
      * Whether NVKMS supports Warp and Blend on this device.
      */
     NvBool supportsWarpAndBlend;
+
+    /*!
+     * Whether this device is an SoC product whose display is driven by the
+     * dGPU-style display class and needs the resume connector re-probe
+     * workaround (bug 6422321).  Do not use this for anything else: it
+     * exists only for that workaround and is tracked for removal by bug
+     * 6556017.
+     */
+    NvBool isSocDgpuDisplayNeedingWar;
 
     /*
      * When requiresAllAllocationsInSysmem=TRUE, then all memory allocations
@@ -1258,9 +1316,40 @@ struct NvKmsAllocDeviceReply {
      */
     NvBool supportsVblankSyncObjects;
 
+    /*!
+     * 'supportsColorPassthrough' indicates whether HW supports
+     * color pipeline passthrough, where pre-comp and or post-comp color pipeline
+     * blocks can be configured to pass through the input pixels untouched, bypassing
+     * the FP16 pipeline, LUTs, CSCs, composition, and scalers. Note that DSC,
+     * dithering, and the YUV420 packer can still be enabled and affect the pixels.
+     */
+    NvBool supportsColorPassthrough;
+
+    /*!
+     * 'supportsFlipSynchronizedInfoframes' indicates whether the HW supports advanced
+     * infoframes.
+     */
+    NvBool supportsFlipSynchronizedInfoframes;
+
+    /*!
+     * 'supportsGenericSharedInfoFrames' indicates whether the display HW
+     * supports generic shared infoframe slots (e.g. separate VSIF and HDR).
+     * When FALSE, HDR and VSIF share a single vendor-specific slot, and
+     * flips will be rejected if both HDR and VSIF are enabled. When HDR is
+     * disabled but DR&M infoframes are still being sent, those infoframes
+     * will be skipped in favor of the VSIF infoframe.
+     */
+    NvBool supportsGenericSharedInfoFrames;
+
+    /*!
+     * 'supportsVirtualRefreshRate' indicates whether the HW supports programming
+     * an exact, possibly fractional refresh rate at flip-time when using VRR.
+     */
+    NvBool supportsVirtualRefreshRate;
+
     /*! framebuffer console base address and size. */
-    NvU64 vtFbBaseAddress;
-    NvU64 vtFbSize;
+    NvU64 vtFbBaseAddress NV_ALIGN_BYTES(8);
+    NvU64 vtFbSize NV_ALIGN_BYTES(8);
 };
 
 struct NvKmsAllocDeviceParams {
@@ -1452,7 +1541,6 @@ struct NvKmsQueryDpyStaticDataParams {
     struct NvKmsQueryDpyStaticDataReply reply;     /*! out */
 };
 
-
 /*!
  * NVKMS_IOCTL_QUERY_DPY_DYNAMIC_DATA: Query dynamic information about
  * the NVKMS dpy object specified by the triplet (deviceHandle,
@@ -1469,31 +1557,21 @@ struct NvKmsQueryDpyDynamicDataRequest {
 
     NvBool forceConnected;
     NvBool forceDisconnected;
-    NvBool overrideEdid;
-    NvBool ignoreEdid;
+    NvBool overrideMetadata;
+    NvBool ignoreMetadata;
     NvBool ignoreEdidChecksum;
     NvBool allowDVISpecPClkOverride;
     NvBool dpInbandStereoSignaling;
     NvBool disableACPIBrightnessHotkeys;
 
     /*
-     * If overrideEdid is TRUE, then edid::buffer[] contains an EDID
-     * to override anything detected.
+     * If overrideMetadata is TRUE, then edid::buffer[]
+     * contains display metadata to override anything detected.
      */
     struct {
         NvU16 bufferSize;
         NvU8 buffer[NVKMS_EDID_BUFFER_SIZE];
     } edid;
-};
-
-/*! Values for the NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC attributes. */
-enum NvKmsDpyAttributeColorBpcValue {
-    NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN =  0,
-    NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_6       =  6,
-    NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8       =  8,
-    NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10      = 10,
-    NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_MAX     =
-        NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10,
 };
 
 typedef struct _NvKmsDpyOutputColorFormatInfo {
@@ -1508,6 +1586,7 @@ enum NvKmsDpyVRRType {
     NVKMS_DPY_VRR_TYPE_GSYNC,
     NVKMS_DPY_VRR_TYPE_ADAPTIVE_SYNC_DEFAULTLISTED,
     NVKMS_DPY_VRR_TYPE_ADAPTIVE_SYNC_NON_DEFAULTLISTED,
+    NVKMS_DPY_VRR_TYPE_GSYNC_V2,
 };
 
 struct NvKmsQueryDpyDynamicDataReply {
@@ -1531,6 +1610,9 @@ struct NvKmsQueryDpyDynamicDataReply {
      */
     enum NvKmsDpyVRRType vrrType;
 
+    /*! Whether the display advertises ALLM support in its EDID HF-VSDB. */
+    NvBool allmCapable;
+
     NvBool supportsHDR;
 
     struct {
@@ -1550,26 +1632,31 @@ struct NvKmsQueryDpyDynamicDataReply {
 
     struct {
         /*!
-         * The size of the EDID in buffer[], or 0 if there is no EDID
-         * available in buffer[].
+         * The size of the display metadata in buffer[], or 0 if there is no
+         * display metadata available in buffer[].
          */
         NvU16 bufferSize;
 
         /*!
-         * Whether NVKMS determined that the EDID is valid.  If the
-         * EDID is not valid, there may still be information available
-         * in infoString: the infoString will describe why the EDID
-         * was deemed invalid.
+         * Whether NVKMS determined that the raw bytes in the buffer are valid.
+         * If the buffer is not valid, there may still be information available
+         * in infoString: the infoString will describe why the buffer was deemed
+         * invalid.
          */
         NvBool valid;
 
         /*!
-         * The raw EDID bytes.
+         * Whether the buffer contains EDID or native DisplayID bytes
+         */
+        NvBool isNativeDID;
+
+        /*!
+         * The raw bytes.
          */
         NvU8 buffer[NVKMS_EDID_BUFFER_SIZE];
 
         /*!
-         * Parsed information from the EDID.  For the raw EDID bytes,
+         * Parsed information from the buffer. For the raw bytes,
          * see NvKmsQueryDpyDynamicDataParams::edid::buffer[].
          */
         char infoString[NVKMS_EDID_INFO_STRING_LENGTH];
@@ -1583,13 +1670,6 @@ struct NvKmsQueryDpyDynamicDataReply {
 struct NvKmsQueryDpyDynamicDataParams {
     struct NvKmsQueryDpyDynamicDataRequest request; /*! in */
     struct NvKmsQueryDpyDynamicDataReply reply;     /*! out */
-};
-
-/*! Values for the NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT attribute. */
-enum NvKmsDpyAttributeRequestedColorFormatValue {
-    NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_RGB = 0,
-    NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_YCbCr422 = 1,
-    NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_YCbCr444 = 2,
 };
 
 struct NvKmsDpyOutputColorParams {
@@ -1719,6 +1799,12 @@ struct NvKmsValidateModeIndexReply {
      * requested.
      */
     NvBool hdmi3DAvailable;
+
+    /*!
+     * The YUV 4:2:0 disposition NVKMS decided for this mode (NONE / SW /
+     * HW).
+     */
+    enum NvYuv420Mode yuv420Mode;
 };
 
 struct NvKmsValidateModeIndexParams {
@@ -1773,6 +1859,12 @@ struct NvKmsValidateModeReply {
      * NvKmsSetModeOneHeadReply.
      */
     struct NvKmsUsageBounds modeUsage;
+
+    /*!
+     * The YUV 4:2:0 disposition NVKMS decided for this mode (NONE / SW /
+     * HW).
+     */
+    enum NvYuv420Mode yuv420Mode;
 };
 
 struct NvKmsValidateModeParams {
@@ -1894,6 +1986,11 @@ enum NvKmsDpyAttributeColorRangeValue {
     NV_KMS_DPY_ATTRIBUTE_COLOR_RANGE_LIMITED = 1,
 };
 
+enum NvKmsRequestedVrrType {
+    NVKMS_REQUESTED_VRR_TYPE_GAMING = 0,
+    NVKMS_REQUESTED_VRR_TYPE_MEDIA,
+};
+
 struct NvKmsSetModeOneHeadRequest {
     /*!
      * The list of dpys to drive with this head; or, empty to disable
@@ -1960,6 +2057,16 @@ struct NvKmsSetModeOneHeadRequest {
      *     VRR is forced to be disabled if this is an Adaptive-Sync monitor.
      */
     enum NvKmsAllowAdaptiveSync allowAdaptiveSync;
+    
+    /*!
+     * Which HW VRR mode to drive on any VRR-enabled heads: 
+     *
+     * NVKMS_VRR_TYPE_GAMING:
+     *     Regular stall-lock based VRR.
+     * NVKMS_VRR_TYPE_MEDIA
+     *     Virtual refresh rate based VRR, requires device support.
+     */
+    enum NvKmsRequestedVrrType vrrType;
 
     /*!
      * Override the minimum refresh rate for VRR monitors specified by the
@@ -1993,6 +2100,41 @@ struct NvKmsSetModeOneHeadRequest {
      */
     enum NvKmsDpyAttributeColorRangeValue colorRange;
     NvBool colorRangeSpecified;
+
+    /*!
+     * YUV 4:2:0 disposition sideband for this head.
+     *
+     * specified=FALSE  -> NVKMS decides.  val is ignored.  NVKMS
+     *                     HeadSurface may pre-pack half-width YCbCr
+     *                     4:2:0 when SW is required and the effective
+     *                     allowHeadSurfaceInNvKms policy is TRUE.
+     *
+     * specified=TRUE   -> Client commits to a particular YUV 4:2:0
+     *                     disposition.  NVKMS cross-checks val against
+     *                     EDID and HW capability and rejects the
+     *                     modeset on mismatch.
+     *
+     *    val=NV_YUV420_MODE_SW   -> Client is providing a pre-packed
+     *                               half-width YCbCr 4:2:0 framebuffer.
+     *                               Valid only when the effective
+     *                               allowHeadSurfaceInNvKms policy is
+     *                               FALSE; otherwise NVKMS rejects the
+     *                               modeset.
+     *    val=NV_YUV420_MODE_HW   -> Client requests HW YUV 4:2:0
+     *                               scanout; NVKMS validates against
+     *                               EDID and HW capability.
+     *    val=NV_YUV420_MODE_NONE -> Client requests RGB output; NVKMS
+     *                               rejects if YUV 4:2:0 is the only
+     *                               viable disposition for this mode
+     *                               on this dpy.
+     *
+     * See the comment above NvKmsMode for the wire-level full-width vs.
+     * half-width semantics that follow from the decided value.
+     */
+    struct {
+        enum NvYuv420Mode val;
+        NvBool            specified;
+    } yuv420Mode;
 };
 
 struct NvKmsSetModeOneDispRequest {
@@ -2037,6 +2179,8 @@ struct NvKmsSetModeRequest {
 
     /*!
      * Whether to use NVKMS's builtin headSurface support when necessary.
+     * Client-specified NV_YUV420_MODE_SW modesets require the effective
+     * value of this policy to be FALSE.
      *
      * XXX NVKMS HEADSURFACE TODO: Make this the default and remove this field.
      */
@@ -2217,28 +2361,6 @@ struct NvKmsSetLutParams {
 };
 
 /*!
- * NVKMS_IOCTL_CHECK_LUT_NOTIFIER: Check or wait on the LUT notifier for the
- * specified apiHead.
- */
-
-struct NvKmsCheckLutNotifierRequest {
-    NvKmsDeviceHandle deviceHandle;
-    NvKmsDispHandle dispHandle;
-    NvU32 head;
-
-    NvBool waitForCompletion;
-};
-
-struct NvKmsCheckLutNotifierReply {
-    NvBool complete;
-};
-
-struct NvKmsCheckLutNotifierParams {
-    struct NvKmsCheckLutNotifierRequest request; /*! in */
-    struct NvKmsCheckLutNotifierReply reply;     /*! out */
-};
-
-/*!
  * NVKMS_IOCTL_IDLE_BASE_CHANNEL: Wait for the base channel to be idle on
  * the requested heads on the requested subdevices of a device.
  *
@@ -2272,14 +2394,13 @@ struct NvKmsIdleBaseChannelParams {
 
 
 /*!
- * NVKMS_IOCTL_FLIP: Flip one or more heads on the subdevices of a device.
+ * NVKMS_IOCTL_FLIP: Flip one or more heads on a device.
  *
  * At least one head must be specified in a flip request, and at most
  * NV_MAX_FLIP_REQUEST_HEADS may be specified.
  */
 
 struct NvKmsFlipRequestOneHead {
-    NvU32 sd;
     NvU32 head;
     struct NvKmsFlipCommonParams flip;
 };
@@ -2309,19 +2430,8 @@ struct NvKmsFlipRequest {
 
 };
 
-enum NvKmsVrrFlipType {
-    NV_KMS_VRR_FLIP_NON_VRR = 0,
-    NV_KMS_VRR_FLIP_GSYNC,
-    NV_KMS_VRR_FLIP_ADAPTIVE_SYNC,
-};
-
 struct NvKmsFlipReply {
-    /*!
-     * Indicates whether the flip was non-VRR, was a VRR flip on one or more
-     * G-SYNC displays, or was a VRR flip exclusively on Adaptive-Sync
-     * displays.
-     */
-    enum NvKmsVrrFlipType vrrFlipType;
+    NvBool vrrFlip;
 
     /*!
      * Indicates either success or the reason the flip request failed.
@@ -3098,7 +3208,6 @@ struct NvKmsGetFrameLockAttributeValidValuesParams {
 
 struct NvKmsEventDpyChanged {
     NvKmsDeviceHandle deviceHandle;
-    NvKmsDispHandle dispHandle;
     NVDpyId dpyId;
 };
 
@@ -3111,7 +3220,6 @@ struct NvKmsEventDpyChanged {
 
 struct NvKmsEventDynamicDpyConnected {
     NvKmsDeviceHandle deviceHandle;
-    NvKmsDispHandle dispHandle;
     NVDpyId dpyId;
 };
 
@@ -3124,7 +3232,6 @@ struct NvKmsEventDynamicDpyConnected {
 
 struct NvKmsEventDynamicDpyDisconnected {
     NvKmsDeviceHandle deviceHandle;
-    NvKmsDispHandle dispHandle;
     NVDpyId dpyId;
 };
 
@@ -3137,7 +3244,6 @@ struct NvKmsEventDynamicDpyDisconnected {
 
 struct NvKmsEventDpyAttributeChanged {
     NvKmsDeviceHandle deviceHandle;
-    NvKmsDispHandle dispHandle;
     NVDpyId dpyId;
     enum NvKmsDpyAttribute attribute;
     NvS64 value NV_ALIGN_BYTES(8);
@@ -3168,12 +3274,34 @@ struct NvKmsEventFrameLockAttributeChanged {
 
 struct NvKmsEventFlipOccurred {
     NvKmsDeviceHandle deviceHandle;
-    /* XXX NVKMS TODO: the dispHandle is currently hard-coded to 0. */
-    NvKmsDispHandle dispHandle;
     NvU32 head;
     NvU32 layer;
 };
 
+
+/*!
+ * NVKMS_EVENT_TYPE_DPY_CONTENT_PROTECTION_CHANGED
+ *
+ * When a dpy content protection status changes, this event will be generated.
+ */
+
+struct NvKmsEventDpyCpChanged {
+    NvKmsDeviceHandle deviceHandle;
+    NVDpyId dpyId;
+    enum NvKmsContentProtection cp;
+};
+
+/*!
+ * NVKMS_EVENT_TYPE_DPY_CP_TOPOLOGY_CHANGED
+ *
+ * When a dpy content protection topology changes, this event will be generated.
+ */
+
+struct NvKmsEventDpyCpTopologyChanged  {
+    NvKmsDeviceHandle deviceHandle;
+    NVDpyId dpyId;
+    const void *topology;
+};
 
 struct NvKmsEvent {
     enum NvKmsEventType eventType;
@@ -3184,6 +3312,8 @@ struct NvKmsEvent {
         struct NvKmsEventDpyAttributeChanged dpyAttributeChanged;
         struct NvKmsEventFrameLockAttributeChanged frameLockAttributeChanged;
         struct NvKmsEventFlipOccurred flipOccurred;
+        struct NvKmsEventDpyCpChanged dpyCpChanged;
+        struct NvKmsEventDpyCpTopologyChanged dpyCpTopologyChanged;
     } u;
 };
 
@@ -3272,9 +3402,6 @@ struct NvKmsClearUnicastEventParams {
  * for the specified heads on the specified disps.  The layer
  * position is in "desktop coordinate space", i.e., relative to the
  * upper left corner of the input viewport.
- *
- * Note that this is only valid if
- * NvKmsAllocDeviceReply::layerCaps[layer].supportsWindowMode is TRUE.
  */
 struct NvKmsSetLayerPositionRequest {
     NvKmsDeviceHandle deviceHandle;

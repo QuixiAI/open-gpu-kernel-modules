@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -23,6 +23,8 @@
 
 #include "gpu/hwpm/profiler_v2.h"
 #include "gpu/hwpm/kern_hwpm.h"
+#include "gpu/device/device.h"
+#include "gpu/subdevice/subdevice.h"
 #include "rmapi/rs_utils.h"
 #include "vgpu/rpc.h"
 #include "kernel/gpu/fifo/kernel_channel_group_api.h"
@@ -134,6 +136,68 @@ _isContextProfilingPermitted
     return NV_FALSE;
 }
 
+static NvBool _isExclusiveMemoryPartition(OBJGPU *pGpu, ProfilerBase *pProf, Device *pDevice, KernelMIGManager *pKernelMIGManager)
+{
+    MIG_INSTANCE_REF ref;
+    Subdevice *pSubdevice;
+    NVC637_CTRL_EXEC_PARTITIONS_GET_PROFILE_CAPACITY_PARAMS capacityParams = {0};
+    NvU32 i;
+    NvU32 ciCount = 0;
+    NvU32 computeSize;
+
+    if (subdeviceGetByInstance(RES_GET_CLIENT(pProf), RES_GET_HANDLE(pDevice),
+                              0, &pSubdevice) != NV_OK)
+    {
+        return NV_FALSE;
+    }
+
+    if (kmigmgrGetInstanceRefFromDevice(pGpu, pKernelMIGManager, pDevice, &ref) != NV_OK)
+    {
+        return NV_FALSE;
+    }
+
+    if (!kmigmgrIsMIGReferenceValid(&ref))
+    {
+        return NV_FALSE;
+    }
+
+    NV_ASSERT_OR_RETURN((ref.pKernelMIGGpuInstance != NULL) &&
+                        (ref.pMIGComputeInstance != NULL), NV_FALSE);
+
+    for (i = 0; i < NV_ARRAY_ELEMENTS(ref.pKernelMIGGpuInstance->MIGComputeInstance); i++)
+    {
+        if (ref.pKernelMIGGpuInstance->MIGComputeInstance[i].bValid)
+        {
+            ciCount++;
+        }
+    }
+
+    // Already shared -> deny
+    NV_ASSERT_OR_RETURN(ciCount != 0, NV_FALSE);
+    if (ciCount > 1)
+    {
+        return NV_FALSE;
+    }
+
+    // If even the smallest CI cannot fit, nothing else can share this GI
+    computeSize = kmigmgrSmallestComputeProfileSize(pGpu, pKernelMIGManager);
+    NV_ASSERT_OR_RETURN(computeSize != KMIGMGR_COMPUTE_SIZE_INVALID, NV_FALSE);
+
+    capacityParams.computeSize = computeSize;
+    if (kmigmgrComputeProfileGetCapacity(pGpu, pKernelMIGManager,
+            ref.pKernelMIGGpuInstance->pProfile,
+            ref.pKernelMIGGpuInstance,
+            RES_GET_CLIENT_HANDLE(pProf),
+            RES_GET_HANDLE(pSubdevice),
+            &capacityParams) != NV_OK)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed to get compute profile capacity.\n");
+        return NV_FALSE;
+    }
+
+    return (capacityParams.profileCount == 0);
+}
+
 static NvBool
 _isMemoryProfilingPermitted(OBJGPU *pGpu, ProfilerBase *pProf)
 {
@@ -141,20 +205,10 @@ _isMemoryProfilingPermitted(OBJGPU *pGpu, ProfilerBase *pProf)
     KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
     Device *pDevice = GPU_RES_GET_DEVICE(pProf);
 
-    if (bSmcGpuPartitioningEnabled && !kmigmgrIsDeviceUsingDeviceProfiling(pGpu, pKernelMIGManager, pDevice))
+    if (bSmcGpuPartitioningEnabled &&
+        !kmigmgrIsDeviceUsingDeviceProfiling(pGpu, pKernelMIGManager, pDevice))
     {
-        MIG_INSTANCE_REF ref;
-
-        if (kmigmgrGetInstanceRefFromDevice(pGpu, pKernelMIGManager, pDevice, &ref) != NV_OK)
-            return NV_FALSE;
-
-        if (!kmigmgrIsMIGReferenceValid(&ref))
-            return NV_FALSE;
-
-        NV_ASSERT_OR_RETURN((ref.pKernelMIGGpuInstance != NULL) && (ref.pMIGComputeInstance != NULL), NV_FALSE);
-        return (ref.pKernelMIGGpuInstance->resourceAllocation.gpcCount ==
-                ref.pMIGComputeInstance->resourceAllocation.gpcCount);
-
+        return _isExclusiveMemoryPartition(pGpu, pProf, pDevice, pKernelMIGManager);
     }
 
     return NV_TRUE;
@@ -350,6 +404,12 @@ profilerBaseDestructState_VF
             memdescUnmap(pProf->pPmaStreamList[pmaChIdx].pNumBytesBufDesc, NV_TRUE,
                          pProf->pPmaStreamList[pmaChIdx].pNumBytesCpuAddr,
                          pProf->pPmaStreamList[pmaChIdx].pNumBytesCpuAddrPriv);
+            //
+            // Clear the CPU mapping pointers right after unmap so a stale,
+            // non-NULL address can't be dereferenced by a later teardown/free.
+            //
+            pProf->pPmaStreamList[pmaChIdx].pNumBytesCpuAddr = NvP64_NULL;
+            pProf->pPmaStreamList[pmaChIdx].pNumBytesCpuAddrPriv = NvP64_NULL;
         }
 
         if (pProf->pPmaStreamList[pmaChIdx].pNumBytesBufDesc != NULL )
@@ -388,16 +448,14 @@ profilerDevConstruct_IMPL
         NV_CHECK_OR_RETURN(LEVEL_NOTICE, rmStatus == NV_OK, rmStatus);
     }
 
-    if (!profilerBaseQueryCapabilities_HAL(pProfBase, pCallContext, pParams,
-                                            &clientPermissions))
-    {
-        return NV_ERR_INSUFFICIENT_PERMISSIONS;
-    }
+    // Capture capabilities only; per-resource privilege enforcement happens later at reservation time.
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+        profilerBaseQueryCapabilities_HAL(pProfBase, pCallContext, pParams, &clientPermissions));
 
     return profilerDevConstructState_HAL(pProfDev, pCallContext, pParams, clientPermissions);
 }
 
-NvBool
+NV_STATUS
 profilerBaseQueryCapabilities_IMPL
 (
     ProfilerBase *pProfBase,
@@ -408,8 +466,6 @@ profilerBaseQueryCapabilities_IMPL
 {
     OBJGPU              *pGpu                   = GPU_RES_GET_GPU(pProfBase);
     API_SECURITY_INFO   *pSecInfo               = pParams->pSecInfo;
-    NvBool               bAnyProfilingPermitted = NV_FALSE;
-    KernelHwpm *pKernelHwpm = GPU_GET_KERNEL_HWPM(pGpu);
     RmClient *pRmClient = dynamicCast(RES_GET_CLIENT(pProfBase), RmClient);
     NVB2CC_ALLOC_PARAMETERS *pUserParams = pParams->pAllocParams;
 
@@ -420,41 +476,51 @@ profilerBaseQueryCapabilities_IMPL
     pClientPermissions->bSysMemoryProfilingPermitted = pClientPermissions->bVideoMemoryProfilingPermitted;
     pClientPermissions->bAsyncCeProfilingPermitted = pClientPermissions->bVideoMemoryProfilingPermitted;
 
-    //
-    // bAdminProfilingPermitted controls access to privileged profiling registers.
-    // This is admin-only; no exceptions, not even CAP_PERFMON
-    //
-    pClientPermissions->bAdminProfilingPermitted = NV_FALSE;
-    if (pSecInfo->privLevel >= RS_PRIV_LEVEL_USER_ROOT)
-    {
-        bAnyProfilingPermitted = NV_TRUE;
-        pClientPermissions->bAdminProfilingPermitted = NV_TRUE;
-    }
-
     if (_isDevProfilingPermitted(pGpu, pProfBase, pUserParams, pSecInfo, pProfBase, pRmClient))
     {
         pClientPermissions->bDevProfilingPermitted = NV_TRUE;
-        bAnyProfilingPermitted = NV_TRUE;
     }
 
     if (_isContextProfilingPermitted(pGpu, pProfBase, pUserParams, pSecInfo, pProfBase, pRmClient))
     {
         pClientPermissions->bCtxProfilingPermitted = NV_TRUE;
-        bAnyProfilingPermitted = NV_TRUE;
     }
 
     if (_isDevTracingPermitted(pGpu, pProfBase, pUserParams, pSecInfo, pProfBase, pRmClient))
     {
         pClientPermissions->bDevTracingPermitted = NV_TRUE;
-        bAnyProfilingPermitted = NV_TRUE;
     }
 
-    if (pKernelHwpm->getProperty(pKernelHwpm, PDB_PROP_KHWPM_HES_CWD_SUPPORTED) && !IS_VIRTUAL(pGpu))
-    {
-        bAnyProfilingPermitted = NV_TRUE;
-    }
+    return NV_OK;
+}
 
-    return bAnyProfilingPermitted;
+NV_STATUS
+profilerBaseCtrlCmdPermissionQuery_IMPL
+(
+    ProfilerBase *pProfiler,
+    NVB0CC_CTRL_PERMISSION_QUERY_PARAMS *pParams
+)
+{
+    OBJGPU            *pGpu         = GPU_RES_GET_GPU(pProfiler);
+    CALL_CONTEXT      *pCallContext = resservGetTlsCallContext();
+    RmClient          *pRmClient    = dynamicCast(RES_GET_CLIENT(pProfiler), RmClient);
+    API_SECURITY_INFO *pSecInfo;
+
+    NV_ASSERT_OR_RETURN(pCallContext != NULL, NV_ERR_INVALID_STATE);
+    NV_ASSERT_OR_RETURN(pRmClient != NULL, NV_ERR_INVALID_CLIENT);
+
+    pSecInfo = &pCallContext->secInfo;
+
+    portMemSet(pParams, 0, sizeof(*pParams));
+
+    pParams->bDevProfilingPermitted =
+        _isDevProfilingPermitted(pGpu, pProfiler, NULL, pSecInfo, pProfiler, pRmClient);
+    pParams->bCtxProfilingPermitted =
+        _isContextProfilingPermitted(pGpu, pProfiler, NULL, pSecInfo, pProfiler, pRmClient);
+    pParams->bDevTracingPermitted =
+        _isDevTracingPermitted(pGpu, pProfiler, NULL, pSecInfo, pProfiler, pRmClient);
+
+    return NV_OK;
 }
 
 /*
@@ -579,7 +645,6 @@ profilerDevConstructStateInterlude_IMPL
     params.bDevProfilingPermitted = clientPermissions.bDevProfilingPermitted;
     params.bCtxProfilingPermitted = clientPermissions.bCtxProfilingPermitted;
     params.bDevTracePermitted = clientPermissions.bDevTracingPermitted;
-    params.bAdminProfilingPermitted = clientPermissions.bAdminProfilingPermitted;
     params.bVideoMemoryProfilingPermitted = clientPermissions.bVideoMemoryProfilingPermitted;
     params.bAsyncCeProfilingPermitted = clientPermissions.bAsyncCeProfilingPermitted;
     params.bSysMemoryProfilingPermitted = clientPermissions.bSysMemoryProfilingPermitted;
@@ -608,7 +673,6 @@ profilerCtxConstructStateInterlude_IMPL
     NVB0CC_CTRL_INTERNAL_PERMISSIONS_INIT_PARAMS params = {0};
 
     params.bCtxProfilingPermitted = clientPermissions.bCtxProfilingPermitted;
-    params.bAdminProfilingPermitted = clientPermissions.bAdminProfilingPermitted;
     params.bVideoMemoryProfilingPermitted = clientPermissions.bVideoMemoryProfilingPermitted;
     params.bAsyncCeProfilingPermitted = clientPermissions.bAsyncCeProfilingPermitted;
     params.bSysMemoryProfilingPermitted = clientPermissions.bSysMemoryProfilingPermitted;
@@ -727,7 +791,7 @@ profilerCtxConstruct_IMPL
     KernelHwpm        *pKernelHwpm = GPU_GET_KERNEL_HWPM(pGpu);
     ProfilerBase      *pProfBase   = staticCast(pProfCtx, ProfilerBase);
     RsResourceRef     *pParentRef  = pCallContext->pResourceRef->pParentRef;
-    RmClient          *pClient     = serverutilGetClientUnderLock(pCallContext->pClient->hClient);
+    RmClient          *pClient     = dynamicCast(pCallContext->pClient, RmClient);
     PROFILER_CLIENT_PERMISSIONS clientPermissions = {0};
 
     if (!pKernelHwpm->getProperty(pKernelHwpm, PDB_PROP_KHWPM_PROFILING_B1CC_SUPPORTED))
@@ -736,10 +800,9 @@ profilerCtxConstruct_IMPL
         return NV_ERR_NOT_SUPPORTED;
     }
 
-    if (!profilerBaseQueryCapabilities_HAL(pProfBase, pCallContext, pParams, &clientPermissions))
-    {
-        return NV_ERR_INSUFFICIENT_PERMISSIONS;
-    }
+    // Capture capabilities only; per-resource privilege enforcement happens later at reservation time.
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, 
+        profilerBaseQueryCapabilities_HAL(pProfBase, pCallContext, pParams, &clientPermissions));
 
     //
     // Bug: 5225901

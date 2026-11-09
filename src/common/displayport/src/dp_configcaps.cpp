@@ -56,6 +56,37 @@ void DPCDHALImpl::updateDPCDOffline()
     }
 }
 
+void DPCDHALImpl::updateDPCDOfflineRetryOnNack()
+{
+    NvU8 buffer;
+    unsigned retries = 16;
+    unsigned i;
+    AuxRetry::status status;
+    for(i=0;i<retries;i++)
+    {
+        status = bus.read(NV_DPCD_REV, &buffer, 1, retries);
+        if (status == AuxRetry::ack)
+        {
+            dpcdOffline = false;
+            break;
+        }
+        else if (status == AuxRetry::nack && bus.isDevicePlugged())
+        {
+            continue;
+        }
+        else
+        {
+            dpcdOffline = true;
+            break;
+        }
+    }
+
+    if(i == retries)
+    {
+        dpcdOffline = true;
+    }
+}
+
 bool DPCDHALImpl::auxAccessAvailable()
 {
     NvU8 buffer[16];
@@ -163,6 +194,11 @@ void DPCDHALImpl::parseAndReadCaps()
     // register (DPCD Address 0000Eh, bit 7) to 1
     //
     caps.extendedRxCapsPresent = false;
+    //
+    // Reset before the burst read below so that a failed / offline caps read leaves
+    // Native DisplayID advertised as absent rather than stale from a previous sink.
+    //
+    caps.bLocalNativeDisplayIdPresent = false;
     if (AuxRetry::ack == bus.read(NV_DPCD_TRAINING_AUX_RD_INTERVAL, &byte, sizeof byte))
     {
         caps.extendedRxCapsPresent = DRF_VAL(_DPCD14, _TRAINING_AUX_RD_INTERVAL, _EXTENDED_RX_CAP, byte);
@@ -204,6 +240,24 @@ void DPCDHALImpl::parseAndReadCaps()
     {
         caps.revisionMajor = DRF_VAL(_DPCD, _REV, _MAJOR, buffer[0]);
         caps.revisionMinor = DRF_VAL(_DPCD, _REV, _MINOR, buffer[0]);
+
+        if (isDpInTunnelingSupported() && bOverrideDpcdRevFromDia)
+        {
+            NvU32 diaDpcdRev = bus.getDirect()->getDpTunnelingDownstreamDpcdRev();
+
+            if ((DRF_VAL(_DPCD, _REV, _MAJOR, diaDpcdRev) == NV_DPCD_REV_MAJOR_1) &&
+                (DRF_VAL(_DPCD, _REV, _MINOR, diaDpcdRev) == NV_DPCD_REV_MINOR_1))
+            {
+                DP_PRINTF(DP_NOTICE,
+                          "DPHAL> DP Tunneling DIA reports DPCD 1.1 sink, AUX reply was %d.%d. "
+                          "Using 1.1 as policy rev.",
+                          caps.revisionMajor, caps.revisionMinor);
+
+                caps.revisionMajor = NV_DPCD_REV_MAJOR_1;
+                caps.revisionMinor = NV_DPCD_REV_MINOR_1;
+            }
+        }
+
         if (isAtLeastVersion(1, 2))
         {
             //
@@ -359,6 +413,26 @@ void DPCDHALImpl::parseAndReadCaps()
         caps.downStreamPortCount = 1;
     }
 
+    //
+    // RECEIVE_PORT0_CAP_0 [0] - LOCAL_NATIVE_DISPLAYID_PRESENT (DPCD 00008h, or
+    // 02208h when the Extended Receiver Capability field is present). Added by the
+    // VESA SCR "DPCD Capability for Native DisplayID support at 0xA4/0xA5" so that a
+    // Source can positively detect Native DisplayID support instead of blindly
+    // probing I2C 0xA4/0xA5. buffer[] still holds the 16 byte burst read that started
+    // at NV_DPCD_REV / NV_DPCD14_EXTENDED_REV, so buffer[0x8] is the matching
+    // RECEIVE_PORT0_CAP_0 of whichever capability field we read.
+    //
+    if (caps.extendedRxCapsPresent)
+    {
+        caps.bLocalNativeDisplayIdPresent =
+            FLD_TEST_DRF(_DPCD14, _EXTENDED_RECEIVE_PORTX_CAP_0, _LOCAL_NATIVE_DISPLAYID, _YES, buffer[0x8]);
+    }
+    else
+    {
+        caps.bLocalNativeDisplayIdPresent =
+            FLD_TEST_DRF(_DPCD, _RECEIVE_PORTX_CAP_0, _LOCAL_NATIVE_DISPLAYID, _YES, buffer[0x8]);
+    }
+
     // Burst read from 0x20 to 0x22.
     bus.read(NV_DPCD_SINK_VIDEO_FALLBACK_FORMATS, &buffer[0], 0x22 - 0x20 + 1);
 
@@ -370,8 +444,34 @@ void DPCDHALImpl::parseAndReadCaps()
 
     if (bLttprSupported)
     {
-        // Burst read from 0xF0000 to 0xF0009
-        if (AuxRetry::ack == bus.read(NV_DPCD14_LT_TUNABLE_PHY_REPEATER_REV, &buffer[0], 10, retries))
+        bool bLttprCapsReadAck = true;
+
+        if (bChunkedLttprCapsReadForDpTunneling && caps.dpInTunnelingCaps.bIsSupported)
+        {
+            static const unsigned chunkSize[]   = { 3, 3, 3, 1 };
+            static const unsigned chunkOffset[] = { 0, 3, 6, 9 };
+            const unsigned        chunkCount    = 4U;
+
+            for (unsigned chunk = 0; chunk < chunkCount; chunk++)
+            {
+                if (AuxRetry::ack != bus.read(NV_DPCD14_LT_TUNABLE_PHY_REPEATER_REV + chunkOffset[chunk],
+                                              &buffer[chunkOffset[chunk]], chunkSize[chunk], retries))
+                {
+                    bLttprCapsReadAck = false;
+                    break;
+                }
+            }
+        }
+        else
+        {
+            // Burst read from 0xF0000 to 0xF0009
+            if (AuxRetry::ack != bus.read(NV_DPCD14_LT_TUNABLE_PHY_REPEATER_REV, &buffer[0], 10, retries))
+            {
+                bLttprCapsReadAck = false;
+            }
+        }
+
+        if (bLttprCapsReadAck)
         {
             caps.repeaterCaps.revisionMinor = DRF_VAL(_DPCD14, _LT_TUNABLE_PHY_REPEATER_REV, _MINOR, buffer[0x0]);
             caps.repeaterCaps.revisionMajor = DRF_VAL(_DPCD14, _LT_TUNABLE_PHY_REPEATER_REV, _MAJOR, buffer[0x0]);
@@ -452,6 +552,15 @@ void DPCDHALImpl::parseAndReadCaps()
         else
         {
             caps.extendedSleepWakeTimeoutRequestMs = buffer[0] * 20;
+        }
+
+        //
+        // Override extended wake caps for DP tunneling to default value when bOverrideExtendedWakeCapsForDpTunneling
+        // is set and DP tunneling is supported.
+        //
+        if (bOverrideExtendedWakeCapsForDpTunneling && caps.dpInTunnelingCaps.bIsSupported)
+        {
+            caps.extendedSleepWakeTimeoutRequestMs = DP_EXTENDED_DPRX_SLEEP_WAKE_TIMEOUT_DEFAULT_MS;
         }
     }
     else
@@ -1003,6 +1112,8 @@ void DPCDHALImpl::populateFakeDpcd()
     caps.enhancedFraming = true;
     caps.downStreamPortPresent = true;
     caps.downStreamPortCount = 1;
+    // A faked DPCD advertises DP 1.1, which predates Native DisplayID entirely.
+    caps.bLocalNativeDisplayIdPresent = false;
 
     // populate the sinkcount interrupt
     interrupts.sinkCount = 1;
@@ -1542,28 +1653,31 @@ void DPCDHALImpl::refreshLinkStatus()
 {
     if (interrupts.laneStatusIntr.linkStatusDirtied)
     {
-        if (caps.supportsESI &&
-            (caps.eDpRevision != NV_DPCD_EDP_REV_VAL_1_4) &&
-            (caps.eDpRevision != NV_DPCD_EDP_REV_VAL_1_4A))
-        {
-            this->fetchLinkStatusESI();
-        }
-        else
-        {
-            this->fetchLinkStatusLegacy();
-        }
+        //
+        // Bug 5950993 We observe mismatch of link status between ESI and Legacy
+        // To ensure compatiblitly with cables and sinks on market, fecth from legacy for now
+        // to avoid unintended link loss false alarm
+        //
+        this->fetchLinkStatusLegacy();
     }
 }
 
 void DPCDHALImpl::parseAndReadInterruptsESI()
 {
     NvU8 buffer[16] = {0};
+    NvU8 legacySinkCount = 0;
     bool automatedTestRequest;
 
     if (AuxRetry::ack != bus.read(NV_DPCD_SINK_COUNT_ESI, &buffer[2], 0x2005 - 0x2002 + 1))
         return;
 
     interrupts.sinkCount = DRF_VAL(_DPCD, _SINK_COUNT_ESI, _SINK_COUNT, buffer[2]);
+
+    // If SINK_COUNT_ESI is zero, fall back to reading legacy SINK_COUNT (0x200h)
+    if ((interrupts.sinkCount == 0) && (AuxRetry::ack == bus.read(NV_DPCD_SINK_COUNT, &legacySinkCount, 1)))
+    {
+        interrupts.sinkCount = NV_DPCD_SINK_COUNT_VAL(legacySinkCount);
+    }
 
     // check if edp revision is v1.4 or v1.4a
     if ((caps.eDpRevision != NV_DPCD_EDP_REV_VAL_1_4) && (caps.eDpRevision != NV_DPCD_EDP_REV_VAL_1_4A))
@@ -1602,15 +1716,11 @@ void DPCDHALImpl::parseAndReadInterruptsESI()
     // Link status changed bit is not necessarily set at all times when the sink
     // loses the lane status. Refresh the lane status in any case on an IRQ
     //
-    if ((caps.eDpRevision != NV_DPCD_EDP_REV_VAL_1_4) &&
-        (caps.eDpRevision != NV_DPCD_EDP_REV_VAL_1_4A))
-    {
-        fetchLinkStatusESI();
-    }
-    else
-    {
-        fetchLinkStatusLegacy();
-    }
+    // Bug 5950993 we observe mismatch of link status between ESI and Legacy
+    // To ensure compatiblitly with cables and sinks on market, fecth from legacy for now
+    // to avoid unintended link loss false alarm
+    //
+    fetchLinkStatusLegacy();
 
     if (interrupts.linkStatusChanged)
     {
@@ -1700,6 +1810,13 @@ void DPCDHALImpl::fetchLinkStatusESI()
             bus.read(NV_DPCD_LANE0_1_STATUS_ESI, &buffer[0xC], bytesToRead);
         }
 
+        if (isDpInTunnelingSupported() && bIsIgnoreDiaNonLttprCrDoneStatus &&
+            (caps.phyRepeaterCount == 0))
+        {
+            buffer[0xC] |= 0x11;  // Set CR_DONE for lanes 0 and 1
+            buffer[0xD] |= 0x11;  // Set CR_DONE for lanes 2 and 3
+        }
+
         for (int lane = 0; lane < 4; lane++)
         {
             unsigned laneBits = buffer[0xC+lane/2] >> (4*(lane & 1));
@@ -1709,8 +1826,8 @@ void DPCDHALImpl::fetchLinkStatusESI()
         }
 
         bool bIsLastRepeater = ((caps.phyRepeaterCount != 0) && (rxIndex == (NvS32)caps.phyRepeaterCount));
-        if (isDpInTunnelingSupported() && bIsIgnoreDiaLttprInterlaneAlignStatus
-            && bIsLastRepeater)
+        if (isDpInTunnelingSupported() && bIsIgnoreDiaLttprInterlaneAlignStatus &&
+            bIsLastRepeater)
         {
             // set BIT 0 of DIA's LTTPR[N] LANE_ALIGN_STATUS_UPDATED_PHY_REPEATER DPCD to 1, where N is the LTTPR Count
             buffer[0xE] |= 1;
@@ -1751,12 +1868,27 @@ void DPCDHALImpl::fetchLinkStatusLegacy()
             bus.read(NV_DPCD_LANE0_1_STATUS, &buffer[2], bytesToRead);
         }
 
+        if (isDpInTunnelingSupported() && bIsIgnoreDiaNonLttprCrDoneStatus &&
+            (caps.phyRepeaterCount == 0))
+        {
+            buffer[2] |= 0x11;  // Set CR_DONE for lanes 0 and 1
+            buffer[3] |= 0x11;  // Set CR_DONE for lanes 2 and 3
+        }
+
         for (int lane = 0; lane < 4; lane++)
         {
             unsigned laneBits = buffer[2+lane/2] >> (4*(lane & 1));
             interrupts.laneStatusIntr.laneStatus[lane].clockRecoveryDone        &= !!(laneBits & 1);
             interrupts.laneStatusIntr.laneStatus[lane].channelEqualizationDone  &= !!(laneBits & 2);
             interrupts.laneStatusIntr.laneStatus[lane].symbolLocked             &= !!(laneBits & 4);
+        }
+
+        bool bIsLastRepeater = ((caps.phyRepeaterCount != 0) && (rxIndex == (NvS32)caps.phyRepeaterCount));
+        if (isDpInTunnelingSupported() && bIsIgnoreDiaLttprInterlaneAlignStatus &&
+            bIsLastRepeater)
+        {
+            // set BIT 0 of DIA's LTTPR[N] LANE_ALIGN_STATUS_UPDATED_PHY_REPEATER DPCD to 1, where N is the LTTPR Count
+            buffer[4] |= 1;
         }
 
         interrupts.laneStatusIntr.interlaneAlignDone    &=
@@ -1897,7 +2029,14 @@ bool DPCDHALImpl::setPowerState(PowerState newState)
         }
         while (timeout.valid() || (retries < 40) /* some panels need up to 40 retries */);
 
-        DP_PRINTF(DP_ERROR, "DisplayPort: Failed to bring panel back to wake state");
+        if (newState == PowerStateD0)
+        {
+            DP_PRINTF(DP_ERROR, "DisplayPort: Failed to bring panel back to wake state (D0)");
+        }
+        else if (newState == PowerStateD3)
+        {
+            DP_PRINTF(DP_ERROR, "DisplayPort: Failed to put panel into sleep state (D3)");
+        }
     }
     else
     {
@@ -2195,6 +2334,7 @@ bool DPCDHALImpl::payloadAllocate(unsigned streamId, unsigned begin, unsigned co
         //
         NvU8 payloadStatus;
         int retries = 0;
+        int auxFailures = 0;
 
         //
         // Bug 1385165 that Synaptics branch revision 1.0 found to spend more than 200ms before table updated.
@@ -2205,6 +2345,7 @@ bool DPCDHALImpl::payloadAllocate(unsigned streamId, unsigned begin, unsigned co
         {
             if ((bus.read(NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS, &payloadStatus, sizeof(payloadStatus)) == AuxRetry::ack))
             {
+                auxFailures = 0;
                 if (FLD_TEST_DRF(_DPCD, _PAYLOAD_TABLE_UPDATE_STATUS, _UPDATED, _YES, payloadStatus))
                 {
                     bResult = true;
@@ -2214,6 +2355,13 @@ bool DPCDHALImpl::payloadAllocate(unsigned streamId, unsigned begin, unsigned co
             else
             {
                 DP_PRINTF(DP_ERROR, "DPHAL> Read NV_DPCD_PAYLOAD_TABLE_UPDATE_STATUS failed.");
+                this->updateDPCDOffline();
+
+                if (++auxFailures >= PAYLOADIDTABLE_AUX_FAILURE_LIMIT || dpcdOffline)
+                {
+                    DP_PRINTF(DP_ERROR, "DPHAL> Aborting payload allocation - AUX link is down.");
+                    break;
+                }
             }
 
             timer->sleep(1);
@@ -2224,8 +2372,17 @@ bool DPCDHALImpl::payloadAllocate(unsigned streamId, unsigned begin, unsigned co
         DP_PRINTF(DP_ERROR, "DPHAL> Send NV_DPCD_PAYLOAD_ALLOC_SET failed.");
     }
 
-    DP_PRINTF(DP_NOTICE, "DPHAL> Requesting allocation Stream:%d | First Slot:%d | Count:%d  (%s)",
-              streamId, begin, count, bResult ? "OK" : "FAILED");
+    if (bResult)
+    {
+        DP_PRINTF(DP_NOTICE, "DPHAL> Requesting allocation Stream:%d | First Slot:%d | Count:%d (OK)",
+                  streamId, begin, count);
+    }
+    else
+    {
+        DP_PRINTF(DP_NOTICE, "DPHAL> Requesting allocation Stream:%d | First Slot:%d | Count:%d (FAILED)",
+                  streamId, begin, count);
+    }
+
     return bResult;
 }
 
@@ -2272,9 +2429,9 @@ bool DPCDHALImpl::clearPendingMsg()
             (AuxRetry::ack != bus.write(NV_DPCD_DEVICE_SERVICE_IRQ_VECTOR_ESI0,
                                         &data, sizeof(data))))
         {
-            DP_PRINTF(DP_ERROR, "DPCONN> %s(): No Pending Message or "
+            DP_PRINTF(DP_ERROR, "DPCONN> No Pending Message or "
                       "Failed to clear pending message: irqVector/data = 0x%08x/0x%08x",
-                      __FUNCTION__, irqVector, data);
+                      irqVector, data);
             return false;
         }
 
@@ -3055,10 +3212,14 @@ bool DPCDHALImpl::setDpTunnelBwAllocation(bool bEnable)
 
 bool DPCDHALImpl::getDpTunnelEstimatedBw(NvU8 &estimatedBw)
 {
-    if (AuxRetry::ack !=
-        bus.read(NV_DPCD20_DP_TUNNEL_ESTIMATED_BW, &estimatedBw, sizeof(estimatedBw)))
+    AuxRetry::status auxStatus =
+        bus.read(NV_DPCD20_DP_TUNNEL_ESTIMATED_BW, &estimatedBw, sizeof(estimatedBw));
+    if (AuxRetry::ack != auxStatus)
     {
-        DP_PRINTF(DP_ERROR, "Failed to read DP Tunnel estimated BW");
+        DP_PRINTF(DP_ERROR,
+                  "DP-TUN> getDpTunnelEstimatedBw: read DP_TUNNEL_ESTIMATED_BW failed "
+                  "(dpcdAddr=0x%05x auxStatus=%d)",
+                  (unsigned)NV_DPCD20_DP_TUNNEL_ESTIMATED_BW, (int)auxStatus);
         return false;
     }
 
@@ -3094,10 +3255,15 @@ bool DPCDHALImpl::hasDpTunnelBwAllocationCapabilityChanged()
 
 bool DPCDHALImpl::writeDpTunnelRequestedBw(NvU8 requestedBw)
 {
-    if (AuxRetry::ack !=
-        bus.write(NV_DPCD20_DP_TUNNEL_REQUESTED_BW, &requestedBw, sizeof(requestedBw)))
+    AuxRetry::status auxStatus =
+        bus.write(NV_DPCD20_DP_TUNNEL_REQUESTED_BW, &requestedBw, sizeof(requestedBw));
+    if (AuxRetry::ack != auxStatus)
     {
-        DP_PRINTF(DP_ERROR, "Failed to write requested BW");
+        DP_PRINTF(DP_ERROR,
+                  "DP-TUN> writeDpTunnelRequestedBw: write DP_TUNNEL_REQUESTED_BW failed "
+                  "(dpcdAddr=0x%05x requestedBw=0x%02x auxStatus=%d)",
+                  (unsigned)NV_DPCD20_DP_TUNNEL_REQUESTED_BW,
+                  requestedBw, (int)auxStatus);
         return false;
     }
 
@@ -3165,6 +3331,13 @@ bool DPCDHALImpl::clearDpTunnelingBwAllocationCapStatus()
     }
 
     return true;
+}
+
+AuxRetry::status DPCDHALImpl::readLegacyIrqBlock()
+{
+    NvU8 dummyBuf[9] = {0};
+
+    return bus.read(NV_DPCD_SINK_COUNT, dummyBuf, sizeof dummyBuf);
 }
 
 DPCDHAL * DisplayPort::MakeDPCDHAL(AuxBus *  bus, Timer * timer, MainLink * main)

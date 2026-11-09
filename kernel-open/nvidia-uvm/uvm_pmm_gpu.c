@@ -348,6 +348,11 @@ static bool gpu_supports_pma_eviction(uvm_gpu_t *gpu)
     return uvm_global_oversubscription;
 }
 
+static bool pma_uses_protected_memory(void)
+{
+    return g_uvm_global.conf_computing_enabled || g_uvm_global.tdisp_enabled;
+}
+
 uvm_gpu_t *uvm_pmm_to_gpu(uvm_pmm_gpu_t *pmm)
 {
     return container_of(pmm, uvm_gpu_t, pmm);
@@ -773,7 +778,8 @@ static bool assert_chunk_mergeable(uvm_pmm_gpu_t *pmm, uvm_gpu_chunk_t *chunk)
 // uniform state. This only merges leaves, so none of the children can be in the
 // split state themselves.
 //
-// The children need to be removed from any lists before the merge.
+// Removes all children from any lists they are on under list_lock before
+// freeing them.
 //
 // The merged chunk inherits the former state of its children.
 static void merge_gpu_chunk(uvm_pmm_gpu_t *pmm, uvm_gpu_chunk_t *chunk)
@@ -791,6 +797,15 @@ static void merge_gpu_chunk(uvm_pmm_gpu_t *pmm, uvm_gpu_chunk_t *chunk)
     // the subchunk state.
     uvm_spin_lock(&pmm->list_lock);
 
+    // A concurrent devmem_page_free_gpu_chunk() may have added a sub-chunk to
+    // va_block_lazy_free The lazy-free kthread acquires pmm->lock before
+    // dequeuing, so it is blocked for now. Remove every sub-chunk from any list
+    // here, under list_lock, so that when the kthread runs after pmm->lock is
+    // released it finds nothing to dequeue and avoids any potential
+    // use-after-free.
+    for (i = 0; i < num_sub; i++)
+        list_del_init(&chunk->suballoc->subchunks[i]->list);
+
     subchunk = chunk->suballoc->subchunks[0];
     child_state = subchunk->state;
 
@@ -798,12 +813,14 @@ static void merge_gpu_chunk(uvm_pmm_gpu_t *pmm, uvm_gpu_chunk_t *chunk)
         UVM_ASSERT(subchunk->va_block);
 
         chunk->va_block = subchunk->va_block;
+        chunk->va_space = subchunk->va_space;
         chunk->is_referenced = subchunk->is_referenced;
     }
     else if (child_state == UVM_PMM_GPU_CHUNK_STATE_TEMP_PINNED) {
         UVM_ASSERT(root_chunk->chunk.suballoc->pinned_leaf_chunks >= num_sub);
         root_chunk->chunk.suballoc->pinned_leaf_chunks += 1 - num_sub;
         chunk->va_block = subchunk->va_block;
+        chunk->va_space = subchunk->va_space;
         if (chunk_is_root_chunk(chunk))
             ++pmm->root_chunks.pinned_count;
     }
@@ -823,10 +840,6 @@ static void merge_gpu_chunk(uvm_pmm_gpu_t *pmm, uvm_gpu_chunk_t *chunk)
 
     for (i = 0; i < num_sub; i++) {
         subchunk = suballoc->subchunks[i];
-
-        // The subchunks should have been removed from their lists prior to the
-        // merge.
-        UVM_ASSERT(list_empty(&subchunk->list));
 
         if ((child_state == UVM_PMM_GPU_CHUNK_STATE_ALLOCATED) && uvm_gpu_chunk_is_user(subchunk))
             UVM_ASSERT(subchunk->va_block);
@@ -1199,6 +1212,7 @@ void uvm_pmm_gpu_mark_chunk_evicted(uvm_pmm_gpu_t *pmm, uvm_gpu_chunk_t *chunk)
     UVM_ASSERT(chunk->va_block);
 
     chunk->va_block = NULL;
+    chunk->va_space = NULL;
     chunk_pin(pmm, chunk);
 
     uvm_spin_unlock(&pmm->list_lock);
@@ -1958,10 +1972,10 @@ NV_STATUS alloc_root_chunk(uvm_pmm_gpu_t *pmm,
     if (gpu->mem_info.numa.enabled)
         flags |= UVM_PMM_ALLOC_FLAGS_DONT_BATCH;
 
-    // In Confidential Computing, the PMA allocator exposes not only regular
-    // ("protected") vidmem, but also another type called ""unprotected" vidmem.
+    // In Confidential Computing and TDISP, the PMA allocator exposes not only
+    // regular ("protected") vidmem, but also another type called "unprotected" vidmem.
     // UVM has no use for the latter type.
-    if (g_uvm_global.conf_computing_enabled)
+    if (pma_uses_protected_memory())
         options.flags |= UVM_PMA_ALLOCATE_PROTECTED_REGION;
 
     if (!gpu->parent->rm_info.isSimulated &&
@@ -2154,10 +2168,12 @@ NV_STATUS split_gpu_chunk(uvm_pmm_gpu_t *pmm, uvm_gpu_chunk_t *chunk)
             uvm_assert_mutex_locked(&chunk->va_block->lock);
 
             subchunk->va_block = chunk->va_block;
+            subchunk->va_space = chunk->va_space;
             subchunk->is_referenced = chunk->is_referenced;
         }
         else if (chunk->state == UVM_PMM_GPU_CHUNK_STATE_TEMP_PINNED) {
             subchunk->va_block = chunk->va_block;
+            subchunk->va_space = chunk->va_space;
         }
     }
 
@@ -2172,6 +2188,7 @@ NV_STATUS split_gpu_chunk(uvm_pmm_gpu_t *pmm, uvm_gpu_chunk_t *chunk)
 
     if (chunk->state == UVM_PMM_GPU_CHUNK_STATE_ALLOCATED) {
         chunk->va_block = NULL;
+        chunk->va_space = NULL;
         chunk->is_referenced = false;
     }
     else if (chunk->state == UVM_PMM_GPU_CHUNK_STATE_TEMP_PINNED) {
@@ -2187,6 +2204,7 @@ NV_STATUS split_gpu_chunk(uvm_pmm_gpu_t *pmm, uvm_gpu_chunk_t *chunk)
         }
 
         chunk->va_block = NULL;
+        chunk->va_space = NULL;
         chunk->is_referenced = false;
     }
 
@@ -2275,6 +2293,7 @@ static void chunk_free_locked(uvm_pmm_gpu_t *pmm, uvm_gpu_chunk_t *chunk)
             UVM_ASSERT(chunk->va_block);
             UVM_ASSERT(list_empty(&chunk->list));
             chunk->va_block = NULL;
+            chunk->va_space = NULL;
             chunk->is_zero = false;
             chunk_pin(pmm, chunk);
         }
@@ -2292,6 +2311,7 @@ static void chunk_free_locked(uvm_pmm_gpu_t *pmm, uvm_gpu_chunk_t *chunk)
     }
 
     chunk->va_block = NULL;
+    chunk->va_space = NULL;
     chunk->is_zero = false;
 
     if (chunk->state == UVM_PMM_GPU_CHUNK_STATE_TEMP_PINNED)
@@ -2527,13 +2547,13 @@ static NV_STATUS uvm_pmm_gpu_pma_evict_pages(void *void_pmm,
     UVM_ASSERT(IS_ALIGNED(UVM_CHUNK_SIZE_MAX, page_size));
     UVM_ASSERT(UVM_CHUNK_SIZE_MAX >= page_size);
 
-    // In Confidential Computing, RM should only request eviction of protected
-    // vidmem.
+    // In Confidential Computing and TDISP, RM should only request eviction of
+    // protected vidmem.
     //
     // TODO: Bug 4287430: there shouldn't be any memory type argument, because
     // the callback can only relate to protected vidmem. This check can be
     // removed alongside the parameter.
-    if (g_uvm_global.conf_computing_enabled && (mem_type != UVM_PMA_GPU_MEMORY_TYPE_PROTECTED))
+    if (pma_uses_protected_memory() && (mem_type != UVM_PMA_GPU_MEMORY_TYPE_PROTECTED))
         return NV_ERR_INVALID_ARGUMENT;
 
     while (num_pages_left_to_evict > 0) {
@@ -2670,13 +2690,13 @@ static NV_STATUS uvm_pmm_gpu_pma_evict_range(void *void_pmm,
                    phys_begin,
                    phys_end);
 
-    // In Confidential Computing, RM should only request eviction of protected
-    // vidmem.
+    // In Confidential Computing and TDISP, RM should only request eviction of
+    // protected vidmem.
     //
     // TODO: Bug 4287430: there shouldn't be any memory type argument, because
     // the callback can only relate to protected vidmem. This check can be
     // removed alongside the parameter.
-    if (g_uvm_global.conf_computing_enabled && (mem_type != UVM_PMA_GPU_MEMORY_TYPE_PROTECTED))
+    if (pma_uses_protected_memory() && (mem_type != UVM_PMA_GPU_MEMORY_TYPE_PROTECTED))
         return NV_ERR_INVALID_ARGUMENT;
 
     // Make sure that all pending allocations, that could have started before
@@ -2947,25 +2967,43 @@ cleanup:
 
 void uvm_pmm_gpu_process_lazy_free(uvm_pmm_gpu_t *pmm)
 {
-    uvm_gpu_chunk_t *chunk;
+    // Process entries one at a time, holding pmm->lock across each dequeue and
+    // free. This closes the race with every path that can call
+    // merge_gpu_chunk() on this chunk's parent while we hold a pointer to it.
+    while (1) {
+        uvm_gpu_chunk_t *chunk;
+        uvm_pmm_gpu_memory_type_t type;
+        bool free_root;
+        NvU32 test_delay_us = pmm->root_chunks.test_lazy_free_delay_us;
 
-    uvm_spin_lock(&pmm->list_lock);
+        uvm_mutex_lock(&pmm->lock);
+        uvm_spin_lock(&pmm->list_lock);
 
-    // Note: We can't use list_for_each_safe_entry() because we drop the lock
-    // in the loop. Instead, just keep removing the first entry until the list
-    // is empty.
-    while (!list_empty(&pmm->root_chunks.va_block_lazy_free)) {
+        if (list_empty(&pmm->root_chunks.va_block_lazy_free)) {
+            uvm_spin_unlock(&pmm->list_lock);
+            uvm_mutex_unlock(&pmm->lock);
+            break;
+        }
+
         chunk = list_first_entry(&pmm->root_chunks.va_block_lazy_free, uvm_gpu_chunk_t, list);
         UVM_ASSERT(chunk->state == UVM_PMM_GPU_CHUNK_STATE_TEMP_PINNED);
+        type = chunk->type;
+
+        free_root = chunk_is_root_chunk(chunk) || chunk_is_last_allocated_child(pmm, chunk);
         list_del_init(&chunk->list);
+
         uvm_spin_unlock(&pmm->list_lock);
 
-        free_chunk(pmm, chunk);
+        if (unlikely(test_delay_us))
+            usleep_range(test_delay_us, test_delay_us + 1000);
 
-        uvm_spin_lock(&pmm->list_lock);
+        free_chunk_with_merges(pmm, chunk);
+
+        uvm_mutex_unlock(&pmm->lock);
+
+        if (free_root)
+            free_next_available_root_chunk(pmm, type);
     }
-
-    uvm_spin_unlock(&pmm->list_lock);
 }
 
 static void process_lazy_free_entry(void *args)
@@ -3563,4 +3601,55 @@ NV_STATUS uvm_test_pmm_get_alloc_list(UVM_TEST_PMM_GET_ALLOC_LIST_PARAMS *params
 out:
     uvm_va_space_up_read(va_space);
     return status;
+}
+
+NV_STATUS uvm_test_pmm_lazy_free_set_delay(UVM_TEST_PMM_LAZY_FREE_SET_DELAY_PARAMS *params, struct file *filp)
+{
+    uvm_va_space_t *va_space = uvm_va_space_get(filp);
+    uvm_gpu_t *gpu;
+
+    gpu = uvm_va_space_retain_gpu_by_uuid(va_space, &params->gpu_uuid);
+    if (!gpu)
+        return NV_ERR_INVALID_DEVICE;
+
+    gpu->pmm.root_chunks.test_lazy_free_delay_us = params->delay_us;
+
+    uvm_gpu_release(gpu);
+
+    return NV_OK;
+}
+
+NV_STATUS uvm_test_pmm_evict_temp_pinned(UVM_TEST_PMM_EVICT_TEMP_PINNED_PARAMS *params, struct file *filp)
+{
+    uvm_va_space_t *va_space = uvm_va_space_get(filp);
+    uvm_gpu_t *gpu;
+    uvm_pmm_gpu_t *pmm;
+    size_t i;
+
+    gpu = uvm_va_space_retain_gpu_by_uuid(va_space, &params->gpu_uuid);
+    if (!gpu)
+        return NV_ERR_INVALID_DEVICE;
+
+    pmm = &gpu->pmm;
+
+    uvm_mutex_lock(&pmm->lock);
+
+    for (i = 0; i < pmm->root_chunks.count; i++) {
+        uvm_gpu_chunk_t *root = &pmm->root_chunks.array[i].chunk;
+        NV_STATUS walk_status;
+
+        if (root->state != UVM_PMM_GPU_CHUNK_STATE_IS_SPLIT)
+            continue;
+
+        do {
+            walk_status = chunk_walk_pre_order(pmm, root, free_first_pinned_chunk_func, NULL);
+        } while (walk_status == NV_ERR_MORE_DATA_AVAILABLE);
+        UVM_ASSERT(walk_status == NV_OK);
+    }
+
+    uvm_mutex_unlock(&pmm->lock);
+
+    uvm_gpu_release(gpu);
+
+    return NV_OK;
 }

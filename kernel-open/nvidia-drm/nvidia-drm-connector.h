@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2026, NVIDIA CORPORATION. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -36,6 +36,12 @@
 #include "nvtypes.h"
 #include "nvkms-api-types.h"
 
+enum nv_drm_allm_mode {
+    NV_DRM_ALLM_MODE_DISABLED        = 0,
+    NV_DRM_ALLM_MODE_ENABLED_DYNAMIC = 1,
+    NV_DRM_ALLM_MODE_ENABLED_FORCED  = 2,
+};
+
 struct nv_drm_connector {
     NvU32 physicalIndex;
 
@@ -46,6 +52,9 @@ struct nv_drm_connector {
 
     struct nv_drm_encoder *nv_detected_encoder;
     struct edid *edid;
+
+    enum NvKmsContentProtection cp;
+    bool cp_event_pending;
 
     atomic_t connection_status_dirty;
 
@@ -63,6 +72,8 @@ struct nv_drm_connector {
      */
     struct nv_drm_crtc *modeset_permission_crtc;
 
+    NvBool allmCapable;
+
     struct drm_connector base;
 };
 
@@ -78,6 +89,11 @@ static inline struct nv_drm_connector *to_nv_connector(
 struct nv_drm_connector_state {
        struct drm_connector_state base;
        enum nv_drm_dithering_mode dithering_mode;
+       enum nv_drm_connector_color_format color_format;
+       enum nv_drm_connector_output_bpc output_bpc;
+       struct drm_property_blob *hdcp_topology_blob;
+       struct drm_property_blob *hdmi_vsif_metadata;
+       enum nv_drm_allm_mode allmMode;
 };
 
 static inline struct nv_drm_connector_state *to_nv_drm_connector_state(
@@ -115,6 +131,10 @@ nv_drm_get_connector(struct drm_device *dev,
 
 bool nv_drm_connector_revoke_permissions(struct drm_device *dev,
                                          struct nv_drm_connector *nv_connector);
+void nv_drm_connector_update_content_protection(struct nv_drm_connector *nv_connector);
+int nv_drm_connector_update_topology_property(struct nv_drm_connector *nv_connector,
+                                              const void *topology);
+
 
 #endif /* NV_DRM_AVAILABLE */
 

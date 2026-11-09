@@ -711,8 +711,6 @@ kceServiceNotificationInterrupt_IMPL
 
     MODS_ARCH_REPORT(NV_ARCH_EVENT_NONSTALL_CE, "%s", "processing CE nonstall interrupt\n");
 
-    kceNonstallIntrCheckAndClear_HAL(pGpu, pKCe, pParams->pThreadState);
-
     // Wake up channels waiting on this event
     engineNonStallIntrNotify(pGpu, RM_ENGINE_TYPE_COPY(pKCe->publicID));
 
@@ -757,6 +755,10 @@ NV_STATUS kceTopLevelPceLceMappingsUpdate_IMPL(OBJGPU *pGpu, KernelCE *pKCe)
             NV_PRINTF(LEVEL_INFO,
                 "CE AutoConfig is not supported. Skipping PCE2LCE update\n");
 
+            bUpdateNvlinkPceLce = NV_FALSE;
+        }
+        else if (status == NV_WARN_NOTHING_TO_DO)
+        {
             bUpdateNvlinkPceLce = NV_FALSE;
         }
         else

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2001-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2001-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -30,13 +30,16 @@
 #include "conftest.h"
 
 #include "nv-lock.h"
-#include "nv-pgprot.h"
 #include "nv-mm.h"
 #include "os-interface.h"
 #include "nv-timer.h"
 #include "nv-time.h"
 #include "nv-chardev-numbers.h"
 #include "nv-platform.h"
+
+#if defined(NV_CXL_CXL_H_PRESENT)
+#include <cxl/cxl.h>
+#endif
 
 #ifndef AUTOCONF_INCLUDED
 #if defined(NV_GENERATED_AUTOCONF_H_PRESENT)
@@ -103,6 +106,7 @@
 #endif
 
 /* task and signal-related items */
+#include <linux/sched/mm.h>
 #include <linux/sched/signal.h>
 #include <linux/sched/task.h>
 #include <linux/sched.h>
@@ -130,6 +134,7 @@
 #include <asm/bitops.h>             /* __set_bit()                      */
 #include <linux/time.h>             /* FD_SET()                         */
 #include <linux/memremap.h>
+#include <asm/bug.h>                /* BUG()                            */
 
 /*
  * Use current->cred->euid, instead of calling current_euid().
@@ -282,12 +287,6 @@ NV_STATUS nvos_forward_error_to_cray(struct pci_dev *, NvU32,
 #define NV_GFP_DMA32 0
 #endif
 
-#if defined(NVCPU_AARCH64) || defined(NVCPU_RISCV64)
-#define NV_ALLOW_WRITE_COMBINING(mt)    1
-#elif defined(NVCPU_X86_64)
-#define NV_ALLOW_WRITE_COMBINING(mt)    ((mt) != NV_MEMORY_TYPE_REGISTERS)
-#endif
-
 #define NV_MAX_RECURRING_WARNING_MESSAGES 10
 
 /* various memory tracking/debugging techniques
@@ -342,12 +341,12 @@ NV_STATUS nvos_forward_error_to_cray(struct pci_dev *, NvU32,
 /* keep track of memory usage */
 #include "nv-memdbg.h"
 
-static inline void *nv_vmalloc(unsigned long size)
+static inline void *nv_vmalloc(unsigned long size, gfp_t flags)
 {
 #if defined(NV_VMALLOC_HAS_PGPROT_T_ARG)
-    void *ptr = __vmalloc(size, GFP_KERNEL, PAGE_KERNEL);
+    void *ptr = __vmalloc(size, flags, PAGE_KERNEL);
 #else
-    void *ptr = __vmalloc(size, GFP_KERNEL);
+    void *ptr = __vmalloc(size, flags);
 #endif
     NV_MEMDBG_ADD(ptr, size);
     return ptr;
@@ -487,10 +486,45 @@ static inline pgprot_t nv_adjust_pgprot(pgprot_t vm_prot)
 #endif
 #endif
 
+extern NvBool NV_API_CALL os_is_vgx_hyper(void);
+
+#if defined(NVCPU_AARCH64)
+
+extern NvBool nvos_is_chipset_io_coherent(void);
+// __pgprot_modify(prot, clear_mask, set_bits): clear PTE_WRITE because
+// retaining it permits dirty-bit write faults.
+#define NV_PGPROT_READ_ONLY(old_prot)                                         \
+            __pgprot_modify(old_prot, PTE_WRITE, PTE_RDONLY)
+
+#elif defined(NVCPU_X86_64)
+
+#define NV_PGPROT_READ_ONLY(old_prot)                                         \
+    __pgprot(pgprot_val((old_prot)) & ~_PAGE_RW)
+
+// pgprot_writecombine is GPL on some kernels, so use bitmasking instead
+#if defined(pgprot_writecombine)
+#undef pgprot_writecombine
+#endif
+static inline pgprot_t pgprot_modify_writecombine(pgprot_t old_prot)
+{
+    return __pgprot((pgprot_val(old_prot) & ~_PAGE_CACHE_MASK) |
+                    cachemode2protval(_PAGE_CACHE_MODE_WC));
+}
+#define pgprot_writecombine pgprot_modify_writecombine
+
+#elif defined(NVCPU_RISCV64)
+
+#define NV_PGPROT_READ_ONLY(old_prot)                                         \
+            __pgprot(pgprot_val((old_prot)) & ~_PAGE_WRITE)
+
+#else
+#error "unsupported architecture"
+#endif
+
 #define NV_IS_SUSER()                   capable(CAP_SYS_ADMIN)
 #define NV_MAY_SLEEP()                  (!irqs_disabled() && !in_interrupt() && !in_atomic())
-#define NV_MODULE_PARAMETER(x)          module_param(x, int, 0)
-#define NV_MODULE_STRING_PARAMETER(x)   module_param(x, charp, 0)
+#define NV_MODULE_PARAMETER(x)          module_param(x, int, 0444)
+#define NV_MODULE_STRING_PARAMETER(x)   module_param(x, charp, 0444)
 #undef  MODULE_PARM
 
 #define NV_HAVE_MEMORY_ENCRYPT_DECRYPT 0
@@ -677,15 +711,13 @@ static inline int nv_remap_page_range(struct vm_area_struct *vma,
 }
 
 static inline int nv_io_remap_page_range(struct vm_area_struct *vma,
-    NvU64 phys_addr, NvU64 size, NvU64 start)
+    NvU64 phys_addr, NvU64 size, NvU64 start, pgprot_t prot)
 {
     int ret = -1;
 #if !defined(NV_XEN_SUPPORT_FULLY_VIRTUALIZED_KERNEL)
-    ret = nv_remap_page_range(vma, start, phys_addr, size,
-        nv_adjust_pgprot(vma->vm_page_prot));
+    ret = nv_remap_page_range(vma, start, phys_addr, size, prot);
 #else
-    ret = io_remap_pfn_range(vma, start, (phys_addr >> PAGE_SHIFT),
-        size, nv_adjust_pgprot(vma->vm_page_prot));
+    ret = io_remap_pfn_range(vma, start, (phys_addr >> PAGE_SHIFT), size, prot);
 #endif
     return ret;
 }
@@ -868,24 +900,6 @@ static inline void nv_kmem_cache_free_stack(nvidia_stack_t *stack)
 #endif
 }
 
-#if defined(NVCPU_X86_64)
-/*
- * RAM is cached on Linux by default, we can assume there's
- * nothing to be done here. This is not the case for the
- * other memory spaces: we will have made an attempt to add
- * a WC MTRR for the frame buffer.
- *
- * If a WC MTRR is present, we can't satisfy the WB mapping
- * attempt here, since the achievable effective memory
- * types in that case are WC and UC, if not it's typically
- * UC (MTRRdefType is UC); we could only satisfy WB mapping
- * requests with a WB MTRR.
- */
-#define NV_ALLOW_CACHING(mt)            ((mt) == NV_MEMORY_TYPE_SYSTEM)
-#else
-#define NV_ALLOW_CACHING(mt)            ((mt) != NV_MEMORY_TYPE_REGISTERS)
-#endif
-
 typedef struct nvidia_pte_s {
     NvU64           phys_addr;
     unsigned long   virt_addr;
@@ -901,6 +915,13 @@ struct nv_dma_buf
     enum dma_data_direction direction;
 };
 #endif // CONFIG_DMA_SHARED_BUFFER
+
+
+typedef struct nv_linux_mm_free_work_s {
+    NvU64 num_pages;
+    struct mm_struct *mm;
+    struct work_struct task;
+} nv_linux_mm_free_work_t;
 
 typedef struct nv_alloc_s {
     struct nv_alloc_s *next;
@@ -932,6 +953,7 @@ typedef struct nv_alloc_s {
     void          *import_priv;
     struct sg_table *import_sgt;
     dma_addr_t     dma_handle;          /* dma handle used by dma_alloc_coherent(), dma_free_coherent() */
+    nv_linux_mm_free_work_t *accounting_mm_work;
 } nv_alloc_t;
 
 /**
@@ -951,83 +973,6 @@ static inline NvBool nv_is_dma_direct(struct device *dev)
 #endif
 
     return get_dma_ops(dev) == NULL;
-}
-
-/**
- * nv_dma_maps_swiotlb - return NV_TRUE if swiotlb is enabled
- *
- * SWIOTLB creates bounce buffers for the DMA mapping layer to
- * use if a driver asks the kernel to map a DMA buffer that is
- * outside of the device's addressable range.  The driver does
- * not function correctly if bounce buffers are enabled for the
- * device.  So if SWIOTLB is enabled, we should avoid making
- * mapping calls.
- */
-static inline NvBool
-nv_dma_maps_swiotlb(struct device *dev)
-{
-    NvBool swiotlb_in_use = NV_FALSE;
-#if defined(CONFIG_SWIOTLB)
-    /*
-     * The __attribute__ ((unused)) is necessary because in at least one
-     * case, *none* of the preprocessor branches below are taken, and
-     * so the ops variable ends up never being referred to at all. This can
-     * happen with the (NV_IS_EXPORT_SYMBOL_PRESENT_swiotlb_map_sg_attrs == 1)
-     * case.
-     */
-    const struct dma_map_ops *ops __attribute__ ((unused)) = get_dma_ops(dev);
-
-    /*
-     * The switch from dma_mapping_ops -> dma_map_ops coincided with the
-     * switch from swiotlb_map_sg -> swiotlb_map_sg_attrs.
-     */
-    #if NV_IS_EXPORT_SYMBOL_PRESENT_swiotlb_map_sg_attrs != 0
-    swiotlb_in_use = (ops->map_sg == swiotlb_map_sg_attrs);
-    #elif NV_IS_EXPORT_SYMBOL_PRESENT_swiotlb_dma_ops != 0
-    swiotlb_in_use = (ops == &swiotlb_dma_ops);
-    #endif
-    /*
-     * The "else" case that is not shown
-     * (for NV_IS_EXPORT_SYMBOL_PRESENT_swiotlb_map_sg_attrs == 0 ||
-     * NV_IS_EXPORT_SYMBOL_PRESENT_swiotlb_dma_ops == 0) does
-     * nothing, and ends up dropping us out to the last line of this function,
-     * effectively returning false. The nearly-human-readable version of that
-     * case is "get_dma_ops() is defined, but neither swiotlb_map_sg_attrs
-     * nor swiotlb_dma_ops is present".
-     *
-     * That can happen on kernels that fall within below range:
-     *
-     * 2017-12-24  4bd89ed39b2ab8dc4ac4b6c59b07d420b0213bec
-     *     ("swiotlb: remove various exports")
-     * 2018-06-28  210d0797c97d0e8f3b1a932a0dc143f4c57008a3
-     *     ("swiotlb: export swiotlb_dma_ops")
-     *
-     * Related to this: Between above two commits, this driver has no way of
-     * detecting whether or not the SWIOTLB is in use. Furthermore, the
-     * driver cannot support DMA remapping. That leads to the following
-     * point: "swiotlb=force" is not supported for kernels falling in above
-     * range.
-     *
-     * The other "else" case that is not shown:
-     * Starting with the 5.0 kernel, swiotlb is integrated into dma_direct,
-     * which is used when there's no IOMMU.  In these kernels, ops == NULL,
-     * swiotlb_dma_ops no longer exists, and we do not support swiotlb=force
-     * (doing so would require detecting when swiotlb=force is enabled and
-     * then returning NV_TRUE even when dma_direct is in use).  So for now,
-     * we just return NV_FALSE and in nv_compute_gfp_mask() we check for
-     * whether swiotlb could possibly be used (outside of swiotlb=force).
-     */
-
-    /*
-     * Commit 2017-11-07 d7b417fa08d ("x86/mm: Add DMA support for
-     * SEV memory encryption") forces SWIOTLB to be enabled when AMD SEV 
-     * is active in all cases.
-     */
-    if (os_cc_enabled)
-        swiotlb_in_use = NV_TRUE;
-#endif
-
-    return swiotlb_in_use;
 }
 
 /*
@@ -1055,6 +1000,7 @@ typedef struct nv_dma_map_s {
     NvU32 cache_type;
     NvBool bReadOnlyDeviceMap;
     struct sg_table *import_sgt;
+    unsigned long dma_attrs;
 
     union
     {
@@ -1104,12 +1050,30 @@ typedef struct nv_dma_map_s {
  * single-page sg elements on Xen Server.
  */
 #if !defined(NV_DOM0_KERNEL_PRESENT)
+#if defined(NV_SG_ALLOC_TABLE_FROM_PAGES_SEGMENT_PRESENT)
+    /*
+    * See Bug 6419127 for the split-submap GMMU contiguity failure.
+    * This function and correct max_segment value avoid the overflow
+    * issue in the kernel.
+    */
+    #define NV_DMA_MAX_SEGMENT_SIZE   ((NvU32)(0x80000000)) /* 2G */
+    #define NV_ALLOC_DMA_SUBMAP_SCATTERLIST(dm, sm, i)                         \
+        ((sg_alloc_table_from_pages_segment(                                   \
+            &(sm)->sgt,                                                        \
+            &(dm)->pages[NV_DMA_SUBMAP_IDX_TO_PAGE_IDX(i)],                    \
+            (sm)->page_count,                                                  \
+            0,                                                                 \
+            (sm)->page_count * PAGE_SIZE,                                      \
+            NV_DMA_MAX_SEGMENT_SIZE,                                           \
+            NV_GFP_KERNEL) == 0) ? NV_OK : NV_ERR_OPERATING_SYSTEM)
+#else
     #define NV_ALLOC_DMA_SUBMAP_SCATTERLIST(dm, sm, i)                        \
         ((sg_alloc_table_from_pages(&sm->sgt,                                 \
             &dm->pages[NV_DMA_SUBMAP_IDX_TO_PAGE_IDX(i)],                     \
             sm->page_count, 0,                                                \
             sm->page_count * PAGE_SIZE, NV_GFP_KERNEL) == 0) ? NV_OK :        \
                 NV_ERR_OPERATING_SYSTEM)
+#endif
 #else
     #define NV_ALLOC_DMA_SUBMAP_SCATTERLIST(dm, sm, i)                \
         ((sg_alloc_table(&sm->sgt, sm->page_count, NV_GFP_KERNEL)) == \
@@ -1209,6 +1173,11 @@ typedef struct coherent_link_info_s {
     /* Bitmap of NUMA node ids, corresponding to the reserved PXMs,
      * available for adding GPU memory to the kernel as system RAM */
     DECLARE_BITMAP(free_node_bitmap, MAX_NUMNODES);
+
+    /*
+     * Track coherent GPU memory discovery independently from address values.
+     */
+    NvBool gpu_mem_info_discovery_attempted;
 } coherent_link_info_t;
 
 #if defined(NV_LINUX_ACPI_EVENTS_SUPPORTED)
@@ -1235,6 +1204,16 @@ struct nv_pci_tegra_devfreq_dev;
 /* linux-specific version of old nv_state_t */
 /* this is a general os-specific state structure. the first element *must* be
    the general state structure, for the generic unix-based code */
+
+#if defined(NV_CXL_CXL_H_PRESENT) && defined(NV_CXL_INIT_SUPPORTED)
+struct nv_cxl {
+    struct cxl_dev_state         cxlds;
+    struct cxl_memdev           *cxlmd;
+    struct cxl_endpoint_decoder *cxled;
+    struct cxl_region           *nv_region;
+};
+#endif
+
 typedef struct nv_linux_state_s {
     nv_state_t nv_state;
 
@@ -1247,6 +1226,11 @@ typedef struct nv_linux_state_s {
 
     /* coherent link information */
      coherent_link_info_t coherent_link_info;
+
+#if defined(NV_CXL_CXL_H_PRESENT) && defined(NV_CXL_INIT_SUPPORTED)
+    /* CXL device state; NULL for non-CXL GPUs */
+    struct nv_cxl *cxl;
+#endif
 
     /* Dedicated queue to be used for removing FB memory which is onlined
      * to kernel as a NUMA node. Refer Bug : 3879845*/
@@ -1418,16 +1402,18 @@ typedef struct nv_linux_state_s {
     struct nv_pci_tegra_devfreq_dev *nvd_devfreq_dev;
     struct nv_pci_tegra_devfreq_dev *sys_devfreq_dev;
     struct nv_pci_tegra_devfreq_dev *pwr_devfreq_dev;
-    NvU32 tegra_suspend_freq;
 
-    int (*devfreq_suspend)(struct device *dev);
-    int (*devfreq_resume)(struct device *dev);
-    int (*devfreq_enable_boost)(struct device *dev, unsigned int duration);
-    int (*devfreq_disable_boost)(struct device *dev);
+    int (*suspend_devfreq_cb)(struct device *dev);
+    int (*resume_devfreq_cb)(struct device *dev);
+    int (*enable_devfreq_boost_cb)(struct device *dev, unsigned int duration, int boost_type);
+    int (*disable_devfreq_boost_cb)(struct device *dev);
 #endif
 
     /* Per-device GPU init on probe setting, initialized from global NVreg_GpuInitOnProbe */
     NvBool init_on_probe;
+
+    /* Suppress duplicate TDISP XIDs from one PCI recovery event. */
+    atomic_t tdisp_aer_reported;
 } nv_linux_state_t;
 
 extern nv_linux_state_t *nv_linux_devices;
@@ -1457,6 +1443,9 @@ extern struct semaphore nv_linux_devices_lock;
 extern struct rw_semaphore nv_system_pm_lock;
 
 extern NvBool nv_ats_supported;
+extern NvBool nv_non_ats_device_present;
+
+void nv_set_max_sysmem_address(void);
 
 /*
  * file-private data
@@ -1528,11 +1517,116 @@ static inline NvBool nv_is_open_complete(nv_linux_file_private_t *nvlfp)
 
 #define NV_STATE_PTR(nvl)   &(((nv_linux_state_t *)(nvl))->nv_state)
 
+static inline NvBool
+nv_is_tdi_in_run_state
+(
+    nv_linux_state_t *nvl
+)
+{
+    return os_is_tdisp_tdi_run_state(NV_STATE_PTR(nvl));
+}
+
+static inline NvBool nv_tdisp_is_tdi_in_run_state
+(
+    nv_linux_state_t *nvl
+)
+{
+    return os_tdisp_enabled && nv_is_tdi_in_run_state(nvl);
+}
+
+static inline NvBool nv_tdisp_is_tdi_not_in_run_state
+(
+    nv_linux_state_t *nvl
+)
+{
+    return os_tdisp_enabled && !nv_is_tdi_in_run_state(nvl);
+}
+
+
 #define NV_ATOMIC_READ(data)            atomic_read(&(data))
 #define NV_ATOMIC_SET(data,val)         atomic_set(&(data), (val))
 #define NV_ATOMIC_INC(data)             atomic_inc(&(data))
 #define NV_ATOMIC_DEC(data)             atomic_dec(&(data))
 #define NV_ATOMIC_DEC_AND_TEST(data)    atomic_dec_and_test(&(data))
+
+/**
+ * nv_dma_maps_swiotlb - return NV_TRUE if swiotlb is enabled
+ *
+ * SWIOTLB creates bounce buffers for the DMA mapping layer to
+ * use if a driver asks the kernel to map a DMA buffer that is
+ * outside of the device's addressable range.  The driver does
+ * not function correctly if bounce buffers are enabled for the
+ * device.  So if SWIOTLB is enabled, we should avoid making
+ * mapping calls.
+ */
+static inline NvBool
+nv_dma_maps_swiotlb(nv_linux_state_t *nvl)
+{
+    NvBool swiotlb_in_use = NV_FALSE;
+
+#if defined(CONFIG_SWIOTLB)
+    /*
+     * The __attribute__ ((unused)) is necessary because in at least one
+     * case, *none* of the preprocessor branches below are taken, and
+     * so the ops variable ends up never being referred to at all. This can
+     * happen with the (NV_IS_EXPORT_SYMBOL_PRESENT_swiotlb_map_sg_attrs == 1)
+     * case.
+     */
+    const struct dma_map_ops *ops __attribute__ ((unused)) = get_dma_ops(nvl->dev);
+
+    /*
+     * The switch from dma_mapping_ops -> dma_map_ops coincided with the
+     * switch from swiotlb_map_sg -> swiotlb_map_sg_attrs.
+     */
+    #if NV_IS_EXPORT_SYMBOL_PRESENT_swiotlb_map_sg_attrs != 0
+    swiotlb_in_use = (ops->map_sg == swiotlb_map_sg_attrs);
+    #elif NV_IS_EXPORT_SYMBOL_PRESENT_swiotlb_dma_ops != 0
+    swiotlb_in_use = (ops == &swiotlb_dma_ops);
+    #endif
+    /*
+     * The "else" case that is not shown
+     * (for NV_IS_EXPORT_SYMBOL_PRESENT_swiotlb_map_sg_attrs == 0 ||
+     * NV_IS_EXPORT_SYMBOL_PRESENT_swiotlb_dma_ops == 0) does
+     * nothing, and ends up dropping us out to the last line of this function,
+     * effectively returning false. The nearly-human-readable version of that
+     * case is "get_dma_ops() is defined, but neither swiotlb_map_sg_attrs
+     * nor swiotlb_dma_ops is present".
+     *
+     * That can happen on kernels that fall within below range:
+     *
+     * 2017-12-24  4bd89ed39b2ab8dc4ac4b6c59b07d420b0213bec
+     *     ("swiotlb: remove various exports")
+     * 2018-06-28  210d0797c97d0e8f3b1a932a0dc143f4c57008a3
+     *     ("swiotlb: export swiotlb_dma_ops")
+     *
+     * Related to this: Between above two commits, this driver has no way of
+     * detecting whether or not the SWIOTLB is in use. Furthermore, the
+     * driver cannot support DMA remapping. That leads to the following
+     * point: "swiotlb=force" is not supported for kernels falling in above
+     * range.
+     *
+     * The other "else" case that is not shown:
+     * Starting with the 5.0 kernel, swiotlb is integrated into dma_direct,
+     * which is used when there's no IOMMU.  In these kernels, ops == NULL,
+     * swiotlb_dma_ops no longer exists, and we do not support swiotlb=force
+     * (doing so would require detecting when swiotlb=force is enabled and
+     * then returning NV_TRUE even when dma_direct is in use).  So for now,
+     * we just return NV_FALSE and in nv_compute_gfp_mask() we check for
+     * whether swiotlb could possibly be used (outside of swiotlb=force).
+     */
+
+    /*
+     * Commit 2017-11-07 d7b417fa08d ("x86/mm: Add DMA support for
+     * SEV memory encryption") forces SWIOTLB to be enabled when AMD SEV
+     * is active in all cases.
+     */
+    if (os_cc_enabled && !os_tdisp_enabled)
+        swiotlb_in_use = NV_TRUE;
+#endif
+
+    return swiotlb_in_use;
+}
+
 
 static inline struct kmem_cache *nv_kmem_cache_create(const char *name, unsigned int size,
                                                       unsigned int align)
@@ -1582,12 +1676,13 @@ static inline struct kmem_cache *nv_kmem_cache_create(const char *name, unsigned
 #include "nv-proto.h"
 
 /*
- * Check if GPU is present on the bus by checking flag
- * NV_FLAG_IN_SURPRISE_REMOVAL(set when eGPU is removed from TB3).
+ * Check if GPU is present on the bus by checking flags
+ * NV_FLAG_IN_SURPRISE_REMOVAL(set when eGPU is removed from TB3) and
+ * NV_FLAG_IN_PCIE_ERROR_RECOVERY(set on a fatal PCIe AER or DPC event).
  */
 static inline NV_STATUS nv_check_gpu_state(nv_state_t *nv)
 {
-    if (NV_IS_DEVICE_IN_SURPRISE_REMOVAL(nv))
+    if (NV_IS_DEVICE_INACCESSIBLE(nv))
     {
         return NV_ERR_GPU_IS_LOST;
     }
@@ -1595,18 +1690,19 @@ static inline NV_STATUS nv_check_gpu_state(nv_state_t *nv)
     return NV_OK;
 }
 
-extern NvU32 NVreg_EnableUserNUMAManagement;
+extern NvU32 NVreg_EnableNUMA;
 extern NvU32 NVreg_OsEnableCxlSupport;
 extern NvU32 NVreg_RegisterPCIDriver;
 extern NvU32 NVreg_RegisterPlatformDeviceDriver;
+extern NvU32 NVreg_EnablePCIeErrorRecovery;
 extern NvU32 NVreg_EnableResizableBar;
 extern NvU32 NVreg_TegraGpuPgMask;
 extern NvU32 NVreg_EnableNonblockingOpen;
 extern NvU32 NVreg_UseKernelSuspendNotifiers;
 extern NvU32 NVreg_GpuInitOnProbe;
 
-extern NvU32 num_probed_nv_devices;
-extern NvU32 num_nv_devices;
+extern atomic_t num_probed_nv_devices;
+extern atomic_t num_nv_devices;
 
 #define NV_FILE_INODE(file) (file)->f_inode
 
@@ -1699,7 +1795,7 @@ static inline int nv_set_numa_status(nv_linux_state_t *nvl, int status)
 
 static inline NvBool nv_platform_use_auto_online(nv_linux_state_t *nvl)
 {
-    return nvl->numa_info.use_auto_online;
+    return (NVreg_EnableNUMA && !os_is_vgx_hyper());
 }
 
 typedef enum
@@ -1724,7 +1820,7 @@ typedef enum
 #else
 #include <linux/gpio/driver.h>
 
-static inline int __to_hwgpio(const struct gpio_device *gdev,
+static inline int __to_hwgpio(struct gpio_device *gdev,
                               const struct of_phandle_args *gpiospec)
 {
 #if defined(CONFIG_OF_GPIO)
@@ -1797,5 +1893,7 @@ static inline int of_get_named_gpio(const struct device_node *np,
 
 #define NV_EXPORT_SYMBOL(symbol)        EXPORT_SYMBOL_GPL(symbol)
 #define NV_CHECK_EXPORT_SYMBOL(symbol)  NV_IS_EXPORT_SYMBOL_PRESENT_##symbol
+// Async PCI probe requires wait_for_device_probe() as a post-registration barrier
+#define NV_PCI_ASYNC_PROBE_SUPPORTED    NV_IS_EXPORT_SYMBOL_PRESENT_wait_for_device_probe
 
 #endif  /* _NV_LINUX_H_ */

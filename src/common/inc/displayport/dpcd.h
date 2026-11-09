@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -110,6 +110,15 @@
 
 #define NV_DPCD_RECEIVE_PORT0_CAP_0                              (0x00000008) /* R-XUR */
 #define NV_DPCD_RECEIVE_PORT1_CAP_0                              (0x0000000A) /* R-XUR */
+//
+// LOCAL_NATIVE_DISPLAYID_PRESENT. Previously RESERVED (Read 0). Defined by the
+// VESA SCR "DPCD Capability for Native DisplayID support at 0xA4/0xA5" against
+// DP v2.1b. When set, the Receiver port has a local Native DisplayID structure
+// at I2C addresses A4h/A5h, so a Source no longer has to blindly probe 0xA4.
+//
+#define NV_DPCD_RECEIVE_PORTX_CAP_0_LOCAL_NATIVE_DISPLAYID               0:0  /* R-XUF */
+#define NV_DPCD_RECEIVE_PORTX_CAP_0_LOCAL_NATIVE_DISPLAYID_NO    (0x00000000) /* R-XUV */
+#define NV_DPCD_RECEIVE_PORTX_CAP_0_LOCAL_NATIVE_DISPLAYID_YES   (0x00000001) /* R-XUV */
 #define NV_DPCD_RECEIVE_PORTX_CAP_0_LOCAL_EDID                           1:1  /* R-XUF */
 #define NV_DPCD_RECEIVE_PORTX_CAP_0_LOCAL_EDID_NO                (0x00000000) /* R-XUV */
 #define NV_DPCD_RECEIVE_PORTX_CAP_0_LOCAL_EDID_YES               (0x00000001) /* R-XUV */
@@ -1185,10 +1194,14 @@ number of Downstream ports will be limited to 32.
 #define NV_DPCD_PANEL_TARGET_LUMINANCE_LSB_VAL_INIT                 (0x00000000) /* RWXUV */
 #define NV_DPCD_PANEL_TARGET_LUMINANCE_MID                          (0x00000735) /* RWXUR */
 #define NV_DPCD_PANEL_TARGET_LUMINANCE_MID_VAL                              7:0  /* RWXUF */
-#define NV_DPCD_PANEL_TARGET_LUMINANCE_MID_VAL_INIT                  0x00000000) /* RWXUV */
+#define NV_DPCD_PANEL_TARGET_LUMINANCE_MID_VAL_INIT                 (0x00000000) /* RWXUV */
 #define NV_DPCD_PANEL_TARGET_LUMINANCE_MSB                          (0x00000736) /* RWXUR */
 #define NV_DPCD_PANEL_TARGET_LUMINANCE_MSB_VAL                              7:0  /* RWXUF */
-#define NV_DPCD_PANEL_TARGET_LUMINANCE_MSB_VAL_INIT                  0x00000000) /* RWXUV */
+#define NV_DPCD_PANEL_TARGET_LUMINANCE_MSB_VAL_INIT                 (0x00000000) /* RWXUV */
+#define NV_DPCD_EDP_RESERVED_1                                      (0x0000073C) /* RWXUR */
+#define NV_DPCD_EDP_RESERVED_1_CUSTOMIZED_HPD                               0:0  /* RWXUF */
+#define NV_DPCD_EDP_RESERVED_1_CUSTOMIZED_HPD_YES                   (0x00000001) /* RWXUV */
+#define NV_DPCD_EDP_RESERVED_1_CUSTOMIZED_HPD_NO                    (0x00000000) /* RWXUV */
 #define NV_DPCD_EDP_REGIONAL_BKLGHT_BASE                            (0x00000740) /* RWXUR */
 #define NV_DPCD_EDP_REGIONAL_BKLGHT_BASE_INDEX_OFFSET_VAL                   7:0  /* RWXUF */
 #define NV_DPCD_EDP_REGIONAL_BKLGHT_BASE_INDEX_OFFSET_VAL_INIT      (0x00000000) /* RWXUV */

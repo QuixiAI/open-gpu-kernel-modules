@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2008-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2008-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -46,6 +46,11 @@
 #include "kernel/gpu/mig_mgr/kernel_mig_manager.h"
 #include "vgpu/dev_vgpu.h"
 
+// Guest STUN completion event types
+#define NV_VGPU_GPU_STUN_EVENT_TYPE_INVALID        0U
+#define NV_VGPU_GPU_STUN_EVENT_TYPE_STUN           1U
+#define NV_VGPU_GPU_STUN_EVENT_TYPE_UNSTUN         2U
+
 typedef MC_ENGINE_BITVECTOR *PMC_ENGINE_BITVECTOR;
 typedef struct HOST_VGPU_DEVICE HOST_VGPU_DEVICE;
 typedef struct KERNEL_HOST_VGPU_DEVICE KERNEL_HOST_VGPU_DEVICE;
@@ -87,7 +92,7 @@ void vgpuService(OBJGPU *pGpu);
 
 extern OBJVGPU *NvVGPU_Table[NV_VGPU_MAX_INSTANCES];
 
-#define NV_VGPU_RPC_TIMEOUT_USEC(pGpu) (10 * 1000000)
+#define NV_VGPU_RPC_TIMEOUT_USEC(pGpu) NV_VGPU_RPC_TIMEOUT_DEFAULT_USEC
 
 struct _vgpu_last_surface_info
 {
@@ -148,6 +153,15 @@ struct _object_vgpu
     VGPU_MEM_INFO gspMessageBuf;
     VGPU_MEM_INFO gspHibernateShrdBufInfo;
 
+    // These values should be used in steady state code rather
+    // that hardcoded values.
+    NvU32 eventRingSize;
+    NvU32 eventRingElementSize;
+    NvU32 eventRingElementCount;
+
+    // Flag indicates whether MCTP events are supported
+    NvBool bMctpEventsSupported;
+
     // CPU plugin shared memory buffer
     NvU32 *shared_memory;
 
@@ -162,7 +176,8 @@ struct _object_vgpu
     // Message sequence counter
     NvU32 sequence_base;
     NvU32 sequence_gsp_request;
-
+    NvU64 sequence_base_gmc;
+    
     /* Stores last primary surface information in displayless mode */
     VGPU_LAST_SURFACE_INFO last_surface_info;
 
@@ -255,7 +270,7 @@ typedef struct vgpu_sysmem_pfn_info {
     MEMORY_DESCRIPTOR *pMemDesc_sysmemPfnRing;  // Describe shared page
 
     VGPU_SYSMEM_PFN_BITMAP_NODE_LIST listVgpuSysmemPfnBitmapHead;
-    VGPU_SYSMEM_PFN_BITMAP_NODE_P    bitmapNodes[MAX_SYSMEM_PFN_BITMAP_NODE];
+    VGPU_SYSMEM_PFN_BITMAP_NODE_P   *pBitmapNodes;
 } VGPU_SYSMEM_PFN_INFO;
 
 typedef VGPU_SYSMEM_PFN_INFO* VGPU_SYSMEM_PFN_INFO_P;

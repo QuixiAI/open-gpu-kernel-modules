@@ -126,6 +126,7 @@ typedef enum
     HAL_IMPL_GB100,
     HAL_IMPL_GB102,
     HAL_IMPL_GB10B,
+    HAL_IMPL_GB10C,
     HAL_IMPL_GB110,
     HAL_IMPL_GB112,
     HAL_IMPL_GB202,
@@ -148,7 +149,7 @@ typedef enum
     HAL_IMPL_T003_ADA_NOT_EXIST,
     HAL_IMPL_T004_HOPPER_NOT_EXIST,
     HAL_IMPL_T234D,
-    HAL_IMPL_T239D,
+    HAL_IMPL_T238D,
     HAL_IMPL_T264D,
     HAL_IMPL_AMODEL,
 
@@ -180,6 +181,7 @@ typedef enum
     { HAL_IMPL_GB100, "GB100" }, \
     { HAL_IMPL_GB102, "GB102" }, \
     { HAL_IMPL_GB10B, "GB10B" }, \
+    { HAL_IMPL_GB10C, "GB10C" }, \
     { HAL_IMPL_GB110, "GB110" }, \
     { HAL_IMPL_GB112, "GB112" }, \
     { HAL_IMPL_GB202, "GB202" }, \
@@ -192,7 +194,7 @@ typedef enum
     { HAL_IMPL_GR100, "GR100" }, \
     { HAL_IMPL_GR102, "GR102" }, \
     { HAL_IMPL_T234D, "T234D" }, \
-    { HAL_IMPL_T239D, "T239D" }, \
+    { HAL_IMPL_T238D, "T238D" }, \
     { HAL_IMPL_T264D, "T264D" }
 
 

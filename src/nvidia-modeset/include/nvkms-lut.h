@@ -44,16 +44,15 @@ NvBool nvAllocLutSurfacesEvo(NVDevEvoPtr pDevEvo);
 void nvFreeLutSurfacesEvo(NVDevEvoPtr pDevEvo);
 
 void nvUploadDataToLutSurfaceEvo(NVSurfaceEvoPtr pSurfEvo,
-                                 const NVEvoLutDataRec *pLUTBuffer,
-                                 NVDispEvoPtr pDispEvo);
+                                 const NVEvoLutDataRec *pLUTBuffer);
 
 static inline void nvCancelLutUpdateEvo(
     const NVDispEvoRec *pDispEvo,
     const NvU32 apiHead)
 {
     NVDevEvoRec *pDevEvo = pDispEvo->pDevEvo;
-    nvkms_free_timer(pDevEvo->lut.apiHead[apiHead].disp[pDispEvo->displayOwner].updateTimer);
-    pDevEvo->lut.apiHead[apiHead].disp[pDispEvo->displayOwner].updateTimer = NULL;
+    nvkms_free_timer(pDevEvo->lut.apiHead[apiHead].updateTimer);
+    pDevEvo->lut.apiHead[apiHead].updateTimer = NULL;
 }
 
 #ifdef __cplusplus

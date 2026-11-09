@@ -48,10 +48,12 @@ uvm_va_space_t *uvm_devmem_page_to_va_space(struct page *page)
 
     // uvm_hmm_unregister_gpu() needs to do a racy check here so
     // page->zone_device_data might be NULL.
-    if (!gpu_chunk || !gpu_chunk->va_block)
+    if (!gpu_chunk || !gpu_chunk->va_space)
         return NULL;
 
-    return gpu_chunk->va_block->hmm.va_space;
+    // Use the cached va_space rather than gpu_chunk->va_block->hmm.va_space
+    // since the va_block may have been freed while the va_space is still valid.
+    return gpu_chunk->va_space;
 }
 
 // Check there are no orphan pages. This should be only called as part of
@@ -85,7 +87,7 @@ bool uvm_devmem_check_orphan_pages(uvm_pmm_gpu_t *pmm)
         uvm_pmm_gpu_root_chunk_unlock(pmm, root_chunk);
     }
 
-    for (pfn = __phys_to_pfn(devmem_start); pfn <= __phys_to_pfn(devmem_end); pfn++) {
+    for (pfn = __phys_to_pfn(devmem_start); pfn < __phys_to_pfn(devmem_end); pfn++) {
         struct page *page = pfn_to_page(pfn);
 
         if (!uvm_is_device_page(page)) {
@@ -113,10 +115,14 @@ static void devmem_page_free_gpu_chunk(uvm_gpu_chunk_t *chunk)
 {
     uvm_gpu_t *gpu = uvm_gpu_chunk_get_gpu(chunk);
 
-    if (chunk->va_block) {
-        uvm_va_space_t *va_space = chunk->va_block->hmm.va_space;
+    UVM_ASSERT(chunk->va_space);
 
-        UVM_ASSERT(va_space);
+    // Use the cached va_space rather than chunk->va_block->hmm.va_space. The
+    // va_block may already have been freed by the time this page_free() callback
+    // runs, but the va_space is guaranteed to outlive the device page.
+    if (chunk->va_space) {
+        uvm_va_space_t *va_space = chunk->va_space;
+
         atomic64_dec(&va_space->hmm.allocated_page_count);
         UVM_ASSERT(atomic64_read(&va_space->hmm.allocated_page_count) >= 0);
     }
@@ -130,6 +136,7 @@ static void devmem_page_free_gpu_chunk(uvm_gpu_chunk_t *chunk)
     UVM_ASSERT(chunk->is_referenced);
 
     chunk->va_block = NULL;
+    chunk->va_space = NULL;
     chunk->is_referenced = false;
 
     if (chunk->state == UVM_PMM_GPU_CHUNK_STATE_ALLOCATED) {
@@ -450,6 +457,7 @@ static const struct dev_pagemap_ops uvm_device_coherent_pgmap_ops =
 static NV_STATUS uvm_devmem_cdmm_init(uvm_parent_gpu_t *parent_gpu)
 {
     uvm_pmm_gpu_devmem_t *devmem;
+    unsigned long end_pfn;
     void *ptr;
     NV_STATUS status;
 
@@ -457,9 +465,9 @@ static NV_STATUS uvm_devmem_cdmm_init(uvm_parent_gpu_t *parent_gpu)
 
     list_for_each_entry(devmem, &g_uvm_global.devmem_ranges.list, list_node) {
         if (devmem->pagemap.range.start == parent_gpu->system_bus.memory_window_start) {
+            end_pfn = SUBSECTION_ALIGN_UP((parent_gpu->system_bus.memory_window_end + 1) >> PAGE_SHIFT);
             UVM_ASSERT(devmem->pagemap.type == MEMORY_DEVICE_COHERENT);
-            UVM_ASSERT(devmem->pagemap.range.end ==
-                       SUBSECTION_ALIGN_UP(parent_gpu->system_bus.memory_window_end >> PAGE_SHIFT) << PAGE_SHIFT);
+            UVM_ASSERT(devmem->pagemap.range.end == (end_pfn << PAGE_SHIFT) - 1);
             list_del(&devmem->list_node);
             parent_gpu->devmem = devmem;
             parent_gpu->device_p2p_initialised = true;
@@ -471,10 +479,11 @@ static NV_STATUS uvm_devmem_cdmm_init(uvm_parent_gpu_t *parent_gpu)
     if (!devmem)
         goto err;
 
-    devmem->size = parent_gpu->system_bus.memory_window_end - parent_gpu->system_bus.memory_window_start;
+    devmem->size = parent_gpu->system_bus.memory_window_end - parent_gpu->system_bus.memory_window_start + 1;
     devmem->pagemap.type = MEMORY_DEVICE_COHERENT;
     devmem->pagemap.range.start = parent_gpu->system_bus.memory_window_start;
-    devmem->pagemap.range.end = SUBSECTION_ALIGN_UP(parent_gpu->system_bus.memory_window_end >> PAGE_SHIFT) << PAGE_SHIFT;
+    end_pfn = SUBSECTION_ALIGN_UP((parent_gpu->system_bus.memory_window_end + 1) >> PAGE_SHIFT);
+    devmem->pagemap.range.end = (end_pfn << PAGE_SHIFT) - 1;
     devmem->pagemap.nr_range = 1;
     devmem->pagemap.ops = &uvm_device_coherent_pgmap_ops;
     devmem->pagemap.owner = &g_uvm_global;

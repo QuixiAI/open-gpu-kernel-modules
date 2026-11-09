@@ -206,6 +206,18 @@ const PRB_FIELD_DESC prb_fields_nvdebug_eng_gpu[] = {
         PRB_MAYBE_FIELD_NAME("rusd_mask")
         PRB_MAYBE_FIELD_DEFAULT(0)
     },
+    {
+        40,
+        {
+            PRB_OPTIONAL,
+            PRB_BOOL,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("is_marked_for_reset")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
 };
 
 // 'Nvd' field defaults
@@ -252,6 +264,144 @@ const PRB_FIELD_DESC prb_fields_nvdebug_eng_kgsp[] = {
         NVDEBUG_ENG_KGSP_RPCINFO,
         0,
         PRB_MAYBE_FIELD_NAME("event_history")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        3,
+        {
+            PRB_REPEATED,
+            PRB_MESSAGE,
+            0,
+        },
+        GSP_PERSISTENTGSPTRACERECORD,
+        0,
+        PRB_MAYBE_FIELD_NAME("persistent_rats")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        5,
+        {
+            PRB_REPEATED,
+            PRB_MESSAGE,
+            0,
+        },
+        GSP_HEARTBEATINFO,
+        0,
+        PRB_MAYBE_FIELD_NAME("heartbeat")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        6,
+        {
+            PRB_REPEATED,
+            PRB_MESSAGE,
+            0,
+        },
+        GSP_MAILBOXREGISTER,
+        0,
+        PRB_MAYBE_FIELD_NAME("mailbox")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+};
+
+// 'KernelNvlink' field defaults
+
+// 'KernelNvlink' field descriptors
+const PRB_FIELD_DESC prb_fields_nvdebug_eng_kernelnvlink[] = {
+    {
+        11,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT64,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("uncontained_error_abort_timeout_ns")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        12,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT64,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("traffic_quiesce_abort_timeout_ns")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        13,
+        {
+            PRB_REPEATED,
+            PRB_MESSAGE,
+            0,
+        },
+        NVDEBUG_ENG_KERNELNVLINK_RESILIENCYTIMINGLOG,
+        0,
+        PRB_MAYBE_FIELD_NAME("resiliency_timing_log")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        14,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT32,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("resiliency_timing_log_drops")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+};
+
+// 'HangDebug' field defaults
+
+// 'HangDebug' field descriptors
+const PRB_FIELD_DESC prb_fields_nvdebug_eng_hangdebug[] = {
+    {
+        1,
+        {
+            PRB_REPEATED,
+            PRB_MESSAGE,
+            0,
+        },
+        NVDEBUG_ENG_HANGDEBUG_BLOCK,
+        0,
+        PRB_MAYBE_FIELD_NAME("blocks")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        2,
+        {
+            PRB_OPTIONAL,
+            PRB_MESSAGE,
+            0,
+        },
+        NVDEBUG_ENG_HANGDEBUG_TRIGGERINFO,
+        0,
+        PRB_MAYBE_FIELD_NAME("trigger")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+};
+
+// 'NvlinkRemapTable' field defaults
+
+// 'NvlinkRemapTable' field descriptors
+const PRB_FIELD_DESC prb_fields_nvdebug_eng_nvlinkremaptable[] = {
+    {
+        1,
+        {
+            PRB_REPEATED,
+            PRB_BYTES,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("remap_table")
         PRB_MAYBE_FIELD_DEFAULT(0)
     },
 };
@@ -394,6 +544,204 @@ const PRB_FIELD_DESC prb_fields_nvdebug_eng_kgsp_rpcinfo[] = {
     },
 };
 
+// 'ResiliencyTimingLog' field defaults
+
+// 'ResiliencyTimingLog' field descriptors
+const PRB_FIELD_DESC prb_fields_nvdebug_eng_kernelnvlink_resiliencytiminglog[] = {
+    {
+        1,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT64,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("timestamp_ns")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        2,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT64,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("elapsed_ns")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        3,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT64,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("timeout_ns")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        4,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT32,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("seq_id")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        5,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT32,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("flow")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        6,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT32,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("event")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        7,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT32,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("status")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        8,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT32,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("quiesce_state")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        9,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT32,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("uvm_idle")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        10,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT32,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("flags")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+};
+
+// 'Block' field defaults
+
+// 'Block' field descriptors
+const PRB_FIELD_DESC prb_fields_nvdebug_eng_hangdebug_block[] = {
+    {
+        1,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT64,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("device_pri_base")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        2,
+        {
+            PRB_REPEATED,
+            PRB_MESSAGE,
+            0,
+        },
+        REGS_REGSANDMEM,
+        0,
+        PRB_MAYBE_FIELD_NAME("regs")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+};
+
+// 'TriggerInfo' field defaults
+
+// 'TriggerInfo' field descriptors
+const PRB_FIELD_DESC prb_fields_nvdebug_eng_hangdebug_triggerinfo[] = {
+    {
+        1,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT32,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("xid")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        2,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT32,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("ctxsw_timeout_info")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+    {
+        3,
+        {
+            PRB_OPTIONAL,
+            PRB_UINT64,
+            0,
+        },
+        0,
+        0,
+        PRB_MAYBE_FIELD_NAME("timestamp_ns")
+        PRB_MAYBE_FIELD_DEFAULT(0)
+    },
+};
+
 // Message descriptors
 const PRB_MSG_DESC prb_messages_nvdebug_eng[] = {
     {
@@ -402,7 +750,7 @@ const PRB_MSG_DESC prb_messages_nvdebug_eng[] = {
         PRB_MAYBE_MESSAGE_NAME("NvDebug.Eng.Mc")
     },
     {
-        13,
+        14,
         prb_fields_nvdebug_eng_gpu,
         PRB_MAYBE_MESSAGE_NAME("NvDebug.Eng.Gpu")
     },
@@ -412,9 +760,24 @@ const PRB_MSG_DESC prb_messages_nvdebug_eng[] = {
         PRB_MAYBE_MESSAGE_NAME("NvDebug.Eng.Nvd")
     },
     {
-        2,
+        5,
         prb_fields_nvdebug_eng_kgsp,
         PRB_MAYBE_MESSAGE_NAME("NvDebug.Eng.KGsp")
+    },
+    {
+        4,
+        prb_fields_nvdebug_eng_kernelnvlink,
+        PRB_MAYBE_MESSAGE_NAME("NvDebug.Eng.KernelNvlink")
+    },
+    {
+        2,
+        prb_fields_nvdebug_eng_hangdebug,
+        PRB_MAYBE_MESSAGE_NAME("NvDebug.Eng.HangDebug")
+    },
+    {
+        1,
+        prb_fields_nvdebug_eng_nvlinkremaptable,
+        PRB_MAYBE_MESSAGE_NAME("NvDebug.Eng.NvlinkRemapTable")
     },
     {
         2,
@@ -430,6 +793,21 @@ const PRB_MSG_DESC prb_messages_nvdebug_eng[] = {
         6,
         prb_fields_nvdebug_eng_kgsp_rpcinfo,
         PRB_MAYBE_MESSAGE_NAME("NvDebug.Eng.KGsp.RpcInfo")
+    },
+    {
+        10,
+        prb_fields_nvdebug_eng_kernelnvlink_resiliencytiminglog,
+        PRB_MAYBE_MESSAGE_NAME("NvDebug.Eng.KernelNvlink.ResiliencyTimingLog")
+    },
+    {
+        2,
+        prb_fields_nvdebug_eng_hangdebug_block,
+        PRB_MAYBE_MESSAGE_NAME("NvDebug.Eng.HangDebug.Block")
+    },
+    {
+        3,
+        prb_fields_nvdebug_eng_hangdebug_triggerinfo,
+        PRB_MAYBE_MESSAGE_NAME("NvDebug.Eng.HangDebug.TriggerInfo")
     },
 };
 

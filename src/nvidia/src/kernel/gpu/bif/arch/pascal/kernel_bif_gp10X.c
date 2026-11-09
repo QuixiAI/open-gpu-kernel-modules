@@ -24,41 +24,16 @@
 
 /* ------------------------- System Includes -------------------------------- */
 #include "gpu/gpu.h"
+#include "core/system.h"
 #include "gpu/bif/kernel_bif.h"
 #include "platform/chipset/chipset.h"
 
-#include "published/pascal/gp102/dev_boot.h"
+#include "published/pascal/gp102/dev_pmc.h"
 #include "published/pascal/gp102/dev_nv_xp.h"
 #include "published/pascal/gp102/dev_nv_xve.h"
 #include "published/pascal/gp102/dev_nv_xve_addendum.h"
 
 /* ------------------------ Public Functions -------------------------------- */
-
-
-/*!
- * @brief  Get the PMC bit of the valid Engines to reset.
- *
- * @return All valid engines
- */
-NvU32
-kbifGetValidEnginesToReset_GP10X
-(
-    OBJGPU    *pGpu,
-    KernelBif *pKernelBif
-)
-{
-    return (DRF_DEF(_PMC, _ENABLE, _PGRAPH, _ENABLED) |
-            DRF_DEF(_PMC, _ENABLE, _PMEDIA, _ENABLED) |
-            DRF_DEF(_PMC, _ENABLE, _CE0, _ENABLED) |
-            DRF_DEF(_PMC, _ENABLE, _CE1, _ENABLED) |
-            DRF_DEF(_PMC, _ENABLE, _CE2, _ENABLED) |
-            DRF_DEF(_PMC, _ENABLE, _PFIFO, _ENABLED) |
-            DRF_DEF(_PMC, _ENABLE, _PDISP, _ENABLED) |
-            DRF_DEF(_PMC, _ENABLE, _NVDEC, _ENABLED) |
-            DRF_DEF(_PMC, _ENABLE, _NVENC0, _ENABLED) |
-            DRF_DEF(_PMC, _ENABLE, _NVENC1, _ENABLED) |
-            DRF_DEF(_PMC, _ENABLE, _SEC, _ENABLED));
-}
 
 
 /*!

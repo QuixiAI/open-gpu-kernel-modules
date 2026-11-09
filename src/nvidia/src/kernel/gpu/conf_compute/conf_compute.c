@@ -29,6 +29,7 @@
 
 #define NVOC_CONF_COMPUTE_H_PRIVATE_ACCESS_ALLOWED
 
+
 #include "nvrm_registry.h"
 #include "gpu/conf_compute/conf_compute.h"
 #include "spdm/rmspdmvendordef.h"
@@ -42,6 +43,11 @@
 #include "kernel/gpu/fifo/kernel_channel.h"
 #include "gpu/conf_compute/conf_compute_api.h"
 #include "class/clcb33.h"
+
+#include "gpu/tdisp/tdisp_mgr.h"
+
+#include "gpu/nvlink/kernel_nvlink.h"
+#include "gpu/keystore/keystore.h"
 
 /*!
  * Local object related functions
@@ -93,15 +99,29 @@ confComputeConstructEngine_IMPL(OBJGPU                  *pGpu,
     pConfCompute->pNonReplayableFaultCcslCtx = NULL;
     pConfCompute->pGspSec2RpcCcslCtx         = NULL;
     pConfCompute->pNvleP2pWrappingCcslCtx    = NULL;
+    pConfCompute->pGspKeystore               = NULL;
+    pConfCompute->pSec2Keystore              = NULL;
 
     confComputeInstLocOverrides(pGpu);
 
     if (gpuIsCCEnabledInHw_HAL(pGpu))
     {
+        if (gpuIsTdispFeatureEnabled(pGpu))
+        {
+            NV_PRINTF(LEVEL_INFO, "The Bounce Buffer CC mode is disabled by TDISP mode\n");
+            pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_ENABLED, NV_FALSE);
+        }
+        else
         {
             NV_PRINTF(LEVEL_INFO, "CC mode is enabled by HW\n");
             pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_ENABLED, NV_TRUE);
         }
+        if (gpuIsBmsaiEnabledInHw_HAL(pGpu))
+        {
+            NV_PRINTF(LEVEL_INFO, "Baremetal Secure AI is enabled by HW\n");
+            pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_BM_SECURE_AI_ENABLED, NV_TRUE);
+        }
+
     }
     else if (gpuIsProtectedPcieEnabledInHw_HAL(pGpu))
     {
@@ -117,14 +137,30 @@ confComputeConstructEngine_IMPL(OBJGPU                  *pGpu,
         NV_PRINTF(LEVEL_INFO, "CC Devtools mode is enabled by HW\n");
         pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_DEVTOOLS_MODE_ENABLED, NV_TRUE);
     }
-
-    if (gpuIsMultiGpuNvleEnabledInHw_HAL(pGpu)
-       )
+    if (gpuIsBmsaiCapableInHw_HAL(pGpu))
     {
-        NV_PRINTF(LEVEL_INFO, "Enabling NVlink encryption with multi GPU mode. \n");
-        pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_ENABLED, NV_TRUE);
-        pConfCompute->setProperty(pConfCompute,
-            PDB_PROP_CONFCOMPUTE_MULTI_GPU_NVLE_MODE_ENABLED, NV_TRUE);
+        NV_PRINTF(LEVEL_INFO, "Baremetal Secure AI capability detected in HW\n");
+        pGpu->setProperty(pGpu, PDB_PROP_GPU_BMSAI_CAPABLE, NV_TRUE);
+    }
+
+    if (gpuIsMultiGpuNvleEnabledInHw_HAL(pGpu))
+    {
+        // Check whether HW CC is enabled to avoid setting the properties when NVLE standalone mode is enabled.
+        if (gpuIsCCEnabledInHw_HAL(pGpu))
+        {
+            NvBool bTdispEnabled = NV_FALSE;
+
+            bTdispEnabled = gpuIsTdispFeatureEnabled(pGpu);
+
+            NV_PRINTF(LEVEL_INFO, "Enabling NVlink encryption with multi GPU mode. \n");
+
+            if (!bTdispEnabled)
+            {
+                pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_ENABLED, NV_TRUE);
+            }
+
+            pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_MULTI_GPU_NVLE_MODE_ENABLED, NV_TRUE);
+        }
     }
 
     status = _confComputeInitRegistryOverrides(pGpu, pConfCompute);
@@ -136,6 +172,7 @@ confComputeConstructEngine_IMPL(OBJGPU                  *pGpu,
 
     if ((sysGetStaticConfig(pSys)->bOsCCEnabled) && !gpuIsCCEnabledInHw_HAL(pGpu) &&
         !gpuIsProtectedPcieEnabledInHw_HAL(pGpu)
+        && (!gpuIsTdispFeatureEnabled(pGpu))
         )
     {
         if (pGpu->getProperty(pGpu, PDB_PROP_GPU_CC_FEATURE_CAPABLE))
@@ -155,7 +192,9 @@ confComputeConstructEngine_IMPL(OBJGPU                  *pGpu,
         bForceEnableCC = (osReadRegistryDword(pGpu, NV_REG_STR_RM_CONFIDENTIAL_COMPUTE, &data) == NV_OK) &&
          FLD_TEST_DRF(_REG_STR, _RM_CONFIDENTIAL_COMPUTE, _ENABLED, _YES, data);
 
-        if (!RMCFG_FEATURE_PLATFORM_GSP && !RMCFG_FEATURE_MODS_FEATURES && !bForceEnableCC)
+        if (!RMCFG_FEATURE_PLATFORM_GSP && !RMCFG_FEATURE_MODS_FEATURES &&
+            !gpuIsBaremetalSecureAiEnabled(pGpu) &&
+            !bForceEnableCC)
         {
             if (!(sysGetStaticConfig(pSys)->bOsCCEnabled))
             {
@@ -177,12 +216,14 @@ confComputeConstructEngine_IMPL(OBJGPU                  *pGpu,
             pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_DEVTOOLS_MODE_ENABLED, NV_FALSE);
             pConfCompute->gspProxyRegkeys |= DRF_DEF(GSP, _PROXY_REG, _CONF_COMPUTE_DEV_MODE, _DISABLE);
         }
-        else if (pGpu->getProperty(pGpu, PDB_PROP_GPU_CC_FEATURE_CAPABLE))
+        else if (pGpu->getProperty(pGpu, PDB_PROP_GPU_CC_FEATURE_CAPABLE)
+                 && !pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_BM_SECURE_AI_ENABLED)
+                )
         {
             pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_CC_FEATURE_ENABLED, NV_TRUE);
             pGpu->setProperty(pGpu, PDB_PROP_GPU_FASTPATH_SEQ_ENABLED, NV_TRUE);
         }
-        else
+        else if (!pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_BM_SECURE_AI_ENABLED))
         {
             NV_PRINTF(LEVEL_ERROR, "GPU does not support confidential compute.\n");
             NV_ASSERT(0);
@@ -227,6 +268,7 @@ _confComputeInitRegistryOverrides
     NvU32  data           = 0;
     Spdm  *pSpdm          = GPU_GET_SPDM(pGpu);
     NvBool bSpdmSupported = confComputeIsSpdmSupported(pGpu, pConfCompute);
+    OBJSYS *pSys = SYS_GET_INSTANCE();
 
     if (bSpdmSupported && (pSpdm == NULL))
     {
@@ -252,6 +294,27 @@ _confComputeInitRegistryOverrides
             pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_DEVTOOLS_MODE_ENABLED, NV_TRUE);
             pConfCompute->gspProxyRegkeys |= DRF_DEF(GSP, _PROXY_REG, _CONF_COMPUTE_DEV_MODE, _ENABLE);
         }
+    }
+
+    if ((osReadRegistryDword(pGpu, NV_REG_STR_RM_CONFIDENTIAL_COMPUTE, &data) == NV_OK) &&
+        (FLD_TEST_DRF(_REG_STR, _RM_CONFIDENTIAL_COMPUTE, _BMSAI_ENABLED, _YES, data)))
+    {
+        if (pSys->cpuInfo.type != NV0000_CTRL_SYSTEM_CPU_TYPE_ARMV9A_GENERIC)
+        {
+            NV_PRINTF(LEVEL_ERROR, "Baremetal Secure AI is only supported on Grace CPU.\n");
+            return NV_ERR_NOT_SUPPORTED;
+        }
+        NV_PRINTF(LEVEL_INFO, "Baremetal Secure AI enabled via regkey override.\n");
+        pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_ENABLED, NV_TRUE);
+        pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_BM_SECURE_AI_ENABLED, NV_TRUE);
+        pConfCompute->setProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_MULTI_GPU_NVLE_MODE_ENABLED, NV_TRUE);
+    }
+
+    if ((osReadRegistryDword(pGpu, NV_REG_STR_RM_CONF_COMPUTE_FORCE_BMSAI_CAPABLE, &data) == NV_OK) &&
+        (data == NV_REG_STR_RM_CONF_COMPUTE_FORCE_BMSAI_CAPABLE_ENABLED))
+    {
+        NV_PRINTF(LEVEL_INFO, "Forcing GPU to show as BMSAI-capable via regkey override.\n");
+        pGpu->setProperty(pGpu, PDB_PROP_GPU_BMSAI_CAPABLE, NV_TRUE);
     }
 
     if ((osReadRegistryDword(pGpu, NV_REG_STR_RM_CC_MULTI_GPU_NVLE_MODE_ENABLED, &data) == NV_OK) &&
@@ -305,7 +368,10 @@ _confComputeInitRegistryOverrides
         }
     }
 
-    if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_ENABLED))
+    // The CC_FEATURE_ENABLED flag isn't ready yet.
+    if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_ENABLED)
+        && !pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_BM_SECURE_AI_ENABLED)
+       )
     {
         if (osReadRegistryDword(pGpu, NV_REG_STR_RM_GSP_OWNED_FAULT_BUFFERS_ENABLE, &data) == NV_OK)
         {
@@ -340,37 +406,51 @@ confComputeDeriveSessionKeys_KERNEL
     ConfidentialCompute *pConfCompute
 )
 {
-    NV_STATUS    status = NV_OK;
+    NV_STATUS     status                     = NV_OK;
+    NvBool        bDerivedNvleP2pWrappingKey = NV_FALSE;
 
-    Spdm        *pSpdm  = GPU_GET_SPDM(pGpu);
+    Spdm         *pSpdm  = GPU_GET_SPDM(pGpu);
+    KernelNvlink *pKernelNvlink = GPU_GET_KERNEL_NVLINK(pGpu);
 
-    if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_ENABLED))
+    // Keystore is always needed for CC, even without SPDM, as it is also used for MODS testing.
+    NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
+                        confComputeKeyStoreInit_HAL(pConfCompute),
+                        ErrorExit);
+
+    if (pSpdm != NULL && pSpdm->getProperty(pSpdm, PDB_PROP_SPDM_ENABLED) && IS_GSP_CLIENT(pGpu))
     {
-        // Keystore is always needed for CC, even without SPDM, as it is also used for MODS testing.
+        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR, objCreate(&pConfCompute->pGspKeystore, pConfCompute, Keystore), ErrorExit);
+        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR, objCreate(&pConfCompute->pSec2Keystore, pConfCompute, Keystore), ErrorExit);
+        void *pExportMasterKey = confComputeKeyStoreGetExportMasterKey(pConfCompute);
+        // Store the export master secret in the keystore.
         NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                            confComputeKeyStoreInit_HAL(pConfCompute),
+                            spdmRetrieveExportSecret(pGpu, pSpdm,
+                                                    CC_EXPORT_MASTER_KEY_SIZE_BYTES,
+                                                    pExportMasterKey),
+                                                    ErrorExit);
+
+        // We use the last ID of the keyspace for the master key.
+        // TODO: assign a LKEYID_*_MASTER_KEY to each keyspace
+        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR, keystoreSetMasterKey(pConfCompute->pGspKeystore, CC_KEYSPACE_GSP_SIZE, pExportMasterKey, CC_EXPORT_MASTER_KEY_SIZE_BYTES, KEYSTORE_USAGE_HKDF_SHA256), ErrorExit);
+        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR, keystoreSetMasterKey(pConfCompute->pSec2Keystore, CC_KEYSPACE_SEC2_SIZE, pExportMasterKey, CC_EXPORT_MASTER_KEY_SIZE_BYTES, KEYSTORE_USAGE_HKDF_SHA256), ErrorExit);
+
+        // Derive secrets for encrypted communication
+        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
+                            confComputeDeriveSecrets_HAL(pConfCompute, MC_ENGINE_IDX_GSP),
                             ErrorExit);
 
-        if (pSpdm != NULL && pSpdm->getProperty(pSpdm, PDB_PROP_SPDM_ENABLED) && IS_GSP_CLIENT(pGpu))
+
+        // Derive initial keyseed for Blackwell.
+        NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
+                            confComputeDeriveInitialKeySeed_HAL(pConfCompute),
+                            ErrorExit);
+
+        NvBool bTdispEnabled = NV_FALSE;
+
+        bTdispEnabled = gpuIsTdispFeatureEnabled(pGpu);
+
+        if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_ENABLED))
         {
-            // Store the export master secret in the keystore.
-            NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                                spdmRetrieveExportSecret(pGpu, pSpdm,
-                                                        CC_EXPORT_MASTER_KEY_SIZE_BYTES,
-                                                        confComputeKeyStoreGetExportMasterKey(pConfCompute)),
-                                                        ErrorExit);
-
-            // Derive secrets for encrypted communication
-            NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                                confComputeDeriveSecrets_HAL(pConfCompute, MC_ENGINE_IDX_GSP),
-                                ErrorExit);
-
-
-            // Derive initial keyseed for Blackwell.
-            NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR,
-                                confComputeDeriveInitialKeySeed_HAL(pConfCompute),
-                                ErrorExit);
-
             // Initialize encryption contexts for encrypted traffic between Kernel-RM and GSP.
             NV_ASSERT_OK_OR_RETURN(ccslContextInitViaKeyId(pConfCompute,
                                                            &pConfCompute->pRpcCcslCtx,
@@ -388,11 +468,31 @@ confComputeDeriveSessionKeys_KERNEL
                                                            &pConfCompute->pNonReplayableFaultCcslCtx,
                                                            CC_GKEYID_GEN(CC_KEYSPACE_GSP, CC_LKEYID_GSP_CPU_NON_REPLAYABLE_FAULT)));
 
+            bDerivedNvleP2pWrappingKey = NV_TRUE;
+        }
+        else if (bTdispEnabled)
+        {
+            //
+            // NVLE with TDISP. The GSP-RPC/DMA/fault CCSL contexts above are not needed, only the
+            // NVLE P2P wrapping key that delivers the NVLink session key to the GPU, so derive
+            // that alone.
+            //
+            bDerivedNvleP2pWrappingKey = NV_TRUE;
+        }
 
+        if (pKernelNvlink != NULL &&
+            knvlinkIsNvleStandaloneModeEnabled(pGpu, pKernelNvlink))
+        {
+            // Enable P2P wrapping key derivation for NVLE without CC.
+            bDerivedNvleP2pWrappingKey = NV_TRUE;
+        }
+
+        if (bDerivedNvleP2pWrappingKey)
+        {
             NV_ASSERT_OK_OR_RETURN(ccslContextInitViaKeyId(pConfCompute,
                                                            &pConfCompute->pNvleP2pWrappingCcslCtx,
                                                            CC_GKEYID_GEN(CC_KEYSPACE_GSP, CC_LKEYID_CPU_GSP_NVLE_P2P_WRAPPING)));
-       }
+        }
     }
 
 ErrorExit:
@@ -413,25 +513,29 @@ _confComputeDeinitSessionKeys
     ConfidentialCompute *pConfCompute
 )
 {
-    if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_ENABLED))
-    {
-        NV_PRINTF(LEVEL_INFO, "Tearing down CC Keys.\n");
+    NV_PRINTF(LEVEL_INFO, "Tearing down CC Keys.\n");
 
-        confComputeKeyStoreDeinit_HAL(pConfCompute);
+    confComputeKeyStoreDeinit_HAL(pConfCompute);
 
-        ccslContextClear(pConfCompute->pRpcCcslCtx);
-        ccslContextClear(pConfCompute->pDmaCcslCtx);
-        ccslContextClear(pConfCompute->pReplayableFaultCcslCtx);
-        ccslContextClear(pConfCompute->pNonReplayableFaultCcslCtx);
-        ccslContextClear(pConfCompute->pNvleP2pWrappingCcslCtx);
+    ccslContextClear(pConfCompute->pRpcCcslCtx);
+    ccslContextClear(pConfCompute->pDmaCcslCtx);
+    ccslContextClear(pConfCompute->pReplayableFaultCcslCtx);
+    ccslContextClear(pConfCompute->pNonReplayableFaultCcslCtx);
+    ccslContextClear(pConfCompute->pGspSec2RpcCcslCtx);
+    ccslContextClear(pConfCompute->pNvleP2pWrappingCcslCtx);
 
-        pConfCompute->pRpcCcslCtx                = NULL;
-        pConfCompute->pDmaCcslCtx                = NULL;
-        pConfCompute->pReplayableFaultCcslCtx    = NULL;
-        pConfCompute->pNonReplayableFaultCcslCtx = NULL;
-        pConfCompute->pGspSec2RpcCcslCtx         = NULL;
-        pConfCompute->pNvleP2pWrappingCcslCtx    = NULL;
-    }
+    pConfCompute->pRpcCcslCtx                = NULL;
+    pConfCompute->pDmaCcslCtx                = NULL;
+    pConfCompute->pReplayableFaultCcslCtx    = NULL;
+    pConfCompute->pNonReplayableFaultCcslCtx = NULL;
+    pConfCompute->pGspSec2RpcCcslCtx         = NULL;
+    pConfCompute->pNvleP2pWrappingCcslCtx    = NULL;
+
+    objDelete(pConfCompute->pGspKeystore);
+    objDelete(pConfCompute->pSec2Keystore);
+
+    pConfCompute->pGspKeystore = NULL;
+    pConfCompute->pSec2Keystore = NULL;
 }
 
 /*!
@@ -556,6 +660,8 @@ confComputeStateInitLocked_IMPL
 )
 {
     RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);
+
+    NV_CHECK_OR_RETURN(LEVEL_ERROR, confComputeTestPlatformSupport_HAL(pGpu, pConfCompute) == NV_OK, NV_ERR_INVALID_STATE);
 
     NV_ASSERT_OK_OR_RETURN(pRmApi->Control(pRmApi,
                                            pGpu->hInternalClient,
@@ -816,6 +922,12 @@ confComputeForceUnprotAlloc
     OBJGPU *pGpu
 )
 {
+    // Use protected memory when TDISP is enabled and GPU is trusted
+    if (gpuIsTdispFeatureEnabled(pGpu) && 
+        tdispmgrIsGpuTrusted_HAL(pGpu, GPU_GET_TDISP_MGR(pGpu)))
+    {
+        return NV_FALSE;
+    }
     //
     // Force unprotected in all other cases
     // (BB CC or TDISP not enabled/not trusted)

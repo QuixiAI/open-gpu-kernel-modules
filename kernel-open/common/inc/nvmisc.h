@@ -259,8 +259,13 @@ extern "C" {
 //
 // 64 Bit Versions
 //
+#if defined(NV_MISRA_COMPLIANCE_REQUIRED)
+#define DRF_SHIFT64(drf)                ((DRF_BASE(drf)) % 64U)
+#define DRF_MASK64(drf)                 (NV_U64_MAX>>(63U-((DRF_EXTENT(drf)) % 64U)+((DRF_BASE(drf)) % 64U)))
+#else
 #define DRF_SHIFT64(drf)                ((DRF_ISBIT(0,drf)) % 64)
 #define DRF_MASK64(drf)                 (NV_U64_MAX>>(63-((DRF_ISBIT(1,drf)) % 64)+((DRF_ISBIT(0,drf)) % 64)))
+#endif
 #define DRF_SHIFTMASK64(drf)            (DRF_MASK64(drf)<<(DRF_SHIFT64(drf)))
 
 #define DRF_DEF64(d,r,f,c)              (((NvU64)(NV ## d ## r ## f ## c))<<DRF_SHIFT64(NV ## d ## r ## f))
@@ -1142,7 +1147,6 @@ static NV_FORCEINLINE NvU64 nvFindGcdU64(NvU64 a, NvU64 b)
 }
 #endif //__cplusplus
 #else
-#include <misc/nvmisc_drf.h>
-#include <misc/bitops.h>
+#include <nvmisc_drf.h>
 #endif // !defined(NVRISCV_LIBFSP_BUILD) || !NVRISCV_LIBFSP_BUILD
 #endif // __NV_MISC_H

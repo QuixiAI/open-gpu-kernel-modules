@@ -96,6 +96,16 @@
 #define NV_DRM_HAS_COLOROP
 #endif
 
+
+#if defined(NV_DRM_CONNECTOR_ATTACH_CONTENT_PROTECTION_PROPERTY_PRESENT) && \
+    defined(NV_DRM_HDCP_UPDATE_CONTENT_PROTECTION_PRESENT)
+#if (IS_ENABLED(CONFIG_DRM_DISPLAY_HDCP_HELPER))
+#include <drm/display/drm_hdcp_helper.h>
+// Support content protection prop only from K5.19 onwards
+#define NV_DRM_SUPPORT_CONTENT_PROTECTION_PROPERTY
+#endif
+#endif
+
 /*
  * Adapt to quirks in FreeBSD's Linux kernel compatibility layer.
  */
@@ -121,6 +131,13 @@
 #endif
 
 /*
+ * For now just use set_page_dirty as the lock variant
+ * is not ported for FreeBSD. (in progress). This calls
+ * vm_page_dirty. Used in nv-mm.h, and must be defined before including it
+ */
+#define set_page_dirty_lock set_page_dirty
+
+/*
  * FreeBSD does not define vm_flags_t in its linuxkpi, since there is already
  * a FreeBSD vm_flags_t (of a different size) and they don't want the names to
  * collide. Temporarily redefine it when including nv-mm.h
@@ -135,13 +152,6 @@
  */
 #undef _NV_H_
 #include <sys/nv.h>
-
-/*
- * For now just use set_page_dirty as the lock variant
- * is not ported for FreeBSD. (in progress). This calls
- * vm_page_dirty. Used in nv-mm.h
- */
-#define set_page_dirty_lock set_page_dirty
 
 /*
  * FreeBSD does not implement drm_atomic_state_free, simply

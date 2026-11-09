@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES.
  * All rights reserved.
  * SPDX-License-Identifier: MIT
  *
@@ -72,6 +72,17 @@ static const SIMPLIFIED_DP2X_LINKCONFIG defaultFallbackMandateTable[] =
     {1, dp2LinkRate_1_62Gbps, NV_TRUE,  NV_FALSE}
 };
 
+//
+// Hard upper bound on the total wall-clock time spent in a single
+// EvoMainLink2x::train() call, covering the initial attempt plus every
+// fallback attempt unless the caller explicitly allows full fallback. We use
+// the average time of the attempts performed so far to predict the cost of the
+// next attempt: if the time remaining in the budget is smaller than that
+// average, we stop instead of starting another attempt, so we try our best not
+// to exceed the budget.
+//
+#define NV_DP2X_LT_TOTAL_TIMEOUT_MS  1000
+
 static NvU32 _getPollingIntervalMsForChannelEqDone(NvU32 pollingInfo)
 {
     NvU32 pollIntervalMsVal     = 0;
@@ -91,7 +102,7 @@ static NvU32 _getPollingIntervalMsForChannelEqDone(NvU32 pollingInfo)
 
 EvoMainLink2x::EvoMainLink2x(EvoInterface *provider, Timer *timer)
     : EvoMainLink(provider, timer), gpuUhbrCaps(0), dfpUhbrCaps(0),
-      bUseRgFlushSequence(false)
+      bUseRgFlushSequence(false), bConnectorIsUSBTypeC(false)
 {
     NvU32   idx = 0U;
     applyDP2xRegkeyOverrides();
@@ -389,8 +400,7 @@ bool EvoMainLink2x::configureLinkRateTable
                     pLinkRates->import((NvU16)params.linkBwTbl[i]);
                     break;
                 default:
-                    DP_PRINTF(DP_ERROR, "DP2xEVO> %s: Unsupported link rate received",
-                           __FUNCTION__);
+                    DP_PRINTF(DP_ERROR, "DP2xEVO> Unsupported link rate received");
                     DP_ASSERT(0);
                     break;
             }
@@ -404,33 +414,30 @@ bool EvoMainLink2x::configureLinkRateTable
  * @brief Link train function in EvoMainLink layer which decides which channel coding
  *        is being to used for the link training.
  *
- * @param[in]      link                 The link configuration requested by client.
- * @param[in]      force                If the link training request would be faked.
- * @param[in]      linkTrainingType     Normal/Fast/No Link Training.
- * @param[out]     retLink              The real link configuration got trained in the end.
- * @param[in]      bSkipLt              If the LT request is only for updating SW states.
- *                                      The link should be already trained to
- *                                      the requested configuration
- * @param[in]      isPostLtAdjRequestGranted    If sink granted to request Post_LT_Adjust.
- * @param[in]      phyRepeaterCount     How many LTTPRs need to be trained.
+ * @param[in]      trainParams          Link training parameters.
  *
  * Output:
  *  True:   Link training succeed.
  *  False:  Link training failed.
  */
-bool EvoMainLink2x::train(const LinkConfiguration & link, bool force,
-                          LinkTrainingType linkTrainingType, LinkConfiguration *retLink,
-                          bool bSkipLt, bool isPostLtAdjRequestGranted,
-                          unsigned phyRepeaterCount)
+bool EvoMainLink2x::train(const LinkTrainParameters &trainParams)
 {
-    bool        ltStatus                    = false;
-    bool        bSkipFallback               = false;
-    bool        bFallback                   = false;
-    bool        retryOnce                   = false;
-    NvU32       ltCounter                   = retLink->getLTCounter();
-    bool        bCur128b132bChannelCoding   = false;
-    bool        bChannelCodingChanged       = false;
-    bool        bIsGpuPowerDownLinkRequest  = false;
+    const LinkConfiguration    &link                        = trainParams.link;
+    const bool                  force                       = trainParams.force;
+    const LinkTrainingType      linkTrainingType            = trainParams.linkTrainingType;
+    LinkConfiguration          *retLink                     = trainParams.retLink;
+    const bool                  bSkipLt                     = trainParams.bSkipLt;
+    const bool                  isPostLtAdjRequestGranted   = trainParams.isPostLtAdjRequestGranted;
+    const unsigned              phyRepeaterCount            = trainParams.phyRepeaterCount;
+    const bool                  bAllowFullFallback          = trainParams.bAllowFullFallback;
+    bool                        ltStatus                    = false;
+    bool                        bSkipFallback               = false;
+    bool                        bFallback                   = false;
+    bool                        retryOnce                   = false;
+    NvU32                       ltCounter                   = retLink->getLTCounter();
+    bool                        bCur128b132bChannelCoding   = false;
+    bool                        bChannelCodingChanged       = false;
+    bool                        bIsGpuPowerDownLinkRequest  = false;
 
     if (provider->getSorIndex() == DP_INVALID_SOR_INDEX)
     {
@@ -463,6 +470,13 @@ bool EvoMainLink2x::train(const LinkConfiguration & link, bool force,
     //
     if (link.peakRate == dp2LinkRate_1_62Gbps && link.lanes == 0)
         bIsGpuPowerDownLinkRequest = true;
+
+    //
+    // Track the wall-clock time and number of attempts unless the caller
+    // explicitly allows full fallback.
+    //
+    NvU64 ltStartTimeUs  = bAllowFullFallback ? 0 : timer->getTimeUs();
+    NvU32 ltAttemptCount = 0;
 
     do
     {
@@ -505,12 +519,16 @@ bool EvoMainLink2x::train(const LinkConfiguration & link, bool force,
         {
             // Do not run the fallback sequence in EvoMainLink::train().
             requestRmLC.policy.setSkipFallBack(true);
-            ltStatus = EvoMainLink::train(requestRmLC, force, linkTrainingType,
-                                          retLink, bSkipLt, isPostLtAdjRequestGranted,
-                                          phyRepeaterCount);
+            LinkTrainParameters baseTrainParams(requestRmLC, force, linkTrainingType,
+                                                retLink, bSkipLt,
+                                                isPostLtAdjRequestGranted,
+                                                phyRepeaterCount,
+                                                bAllowFullFallback);
+            ltStatus = EvoMainLink::train(baseTrainParams);
         }
 
         ltCounter++;
+        ltAttemptCount++;
 
         // If LT passes or if client requests do not fallback, no fallback required.
         if (ltStatus || bSkipFallback)
@@ -534,44 +552,71 @@ bool EvoMainLink2x::train(const LinkConfiguration & link, bool force,
             }
             else
             {
-                if (this->isConnectorUSBTypeC() &&
-                    requestRmLC.bIs128b132bChannelCoding &&
-                    requestRmLC.peakRate > dp2LinkRate_10_0Gbps &&
-                    bCableVconnSourceUnknown)
+                if (!bAllowFullFallback)
                 {
                     //
-                    // Invalidate the link rate from fallback table if the connector type is USB-C to DP
-                    // and VCONN source is unknown.
-                    // Source will not retry the same link rate if fallback LT fails again.
+                    // Before preparing another fallback attempt, make sure it fits
+                    // the total LT time budget (see NV_DP2X_LT_TOTAL_TIMEOUT_MS).
+                    // Predict the next attempt's cost from the average duration of
+                    // the attempts so far; if the time remaining is less than that
+                    // average, stop here. This check is done BEFORE resetDPRXLink so
+                    // we never reset the link and then fail to retrain it.
                     //
-                    invalidateLinkRatesInFallbackTable(requestRmLC.peakRate);
-                }
-                //
-                // Get next available link configuration based on DP2.1 spec, Table 3-31
-                // Break here if next link configuration is not available.
-                //
-                if (!this->getFallbackForDP2xLinkTraining(&requestRmLC))
-                {
-                    DP_PRINTF(DP_ERROR, "DP2xEVO> No link configuration available for fallback");
-                    bFallback = false;
+                    NvU64 elapsedMs     = (timer->getTimeUs() - ltStartTimeUs) / 1000;
+                    NvU64 avgPerAttempt = elapsedMs / ltAttemptCount;   // ltAttemptCount >= 1 here
+                    NvU64 remainingMs   = (elapsedMs < NV_DP2X_LT_TOTAL_TIMEOUT_MS) ?
+                                          (NV_DP2X_LT_TOTAL_TIMEOUT_MS - elapsedMs) : 0;
+
+                    if (remainingMs < avgPerAttempt)
+                    {
+                        DP_PRINTF(DP_WARNING, "DP2xEVO> LT time budget nearly exhausted (%u ms used over "
+                                  "%u attempt(s), avg %u ms/attempt, %u ms left); skipping further fallback.",
+                                  (NvU32)elapsedMs, ltAttemptCount, (NvU32)avgPerAttempt, (NvU32)remainingMs);
+                        bFallback = false;
+                    }
                 }
 
-                //
-                // Do not retry again later if it fails. Even it's a new link configuration.
-                // We can only enable this once the option is formalized in spec
-                // and implemented in compliance device.
-                //
-                retryOnce = false;
-                bChannelCodingChanged = (requestRmLC.bIs128b132bChannelCoding != bCur128b132bChannelCoding);
-                if (bChannelCodingChanged)
+                if (bFallback)
                 {
-                    DP_PRINTF(DP_NOTICE, "DP2xEVO> Fallback - Reset DP link before LT.");
-                    // Reset link due to changing the channel coding during LT
-                    resetParam.reason = DP2X_ResetLinkForFallback;
-                    if (!resetDPRXLink(resetParam))
+                    if (this->isConnectorUSBTypeC() &&
+                        requestRmLC.bIs128b132bChannelCoding &&
+                        requestRmLC.peakRate > dp2LinkRate_10_0Gbps &&
+                        bCableVconnSourceUnknown)
                     {
-                        DP_PRINTF(DP_ERROR, "DP2xEVO> Reset DP link for fallback failed.");
-                        return false;
+                        //
+                        // Invalidate the link rate from fallback table if the connector type is USB-C to DP
+                        // and VCONN source is unknown.
+                        // Source will not retry the same link rate if fallback LT fails again.
+                        //
+                        invalidateLinkRatesInFallbackTable(requestRmLC.peakRate);
+                    }
+                    //
+                    // Get next available link configuration based on DP2.1 spec, Table 3-31
+                    // Break here if next link configuration is not available.
+                    //
+                    if (!this->getFallbackForDP2xLinkTraining(&requestRmLC))
+                    {
+                        DP_PRINTF(DP_ERROR, "DP2xEVO> No link configuration available for fallback");
+                        bFallback = false;
+                    }
+
+                    //
+                    // Do not retry again later if it fails. Even it's a new link configuration.
+                    // We can only enable this once the option is formalized in spec
+                    // and implemented in compliance device.
+                    //
+                    retryOnce = false;
+                    bChannelCodingChanged = (requestRmLC.bIs128b132bChannelCoding != bCur128b132bChannelCoding);
+                    if (bChannelCodingChanged)
+                    {
+                        DP_PRINTF(DP_NOTICE, "DP2xEVO> Fallback - Reset DP link before LT.");
+                        // Reset link due to changing the channel coding during LT
+                        resetParam.reason = DP2X_ResetLinkForFallback;
+                        if (!resetDPRXLink(resetParam))
+                        {
+                            DP_PRINTF(DP_ERROR, "DP2xEVO> Reset DP link for fallback failed.");
+                            return false;
+                        }
                     }
                 }
             }
@@ -1199,6 +1244,7 @@ bool EvoMainLink2x::resetDPRXLink(DP2XResetParam resetParam)
         ltRmParams.cmd |= DRF_DEF(0073_CTRL, _DP2X_CMD, _FAKE_LINK_TRAINING, _DONOT_TOGGLE_TRANSMISSION);
     }
 
+    bFailed = false;
     do
     {
         ret = provider->rmControl0073(NV0073_CTRL_CMD_DP2X_LINK_TRAINING_CTRL,
@@ -1218,13 +1264,14 @@ bool EvoMainLink2x::resetDPRXLink(DP2XResetParam resetParam)
                 timer->sleep(NV_DP2X_LT_CHNL_EQ_INTERLANE_ALIGN_POLLING_INTERVAL);
                 continue;
             }
+            return false;
         }
         // If it's done, leave.
         if (FLD_TEST_DRF(0073_CTRL, _DP2X_POLLING_INFO, _RESULT, _DONE, ltRmParams.pollingInfo))
             break;
     } while (timeout.valid());
 
-    return ((FLD_TEST_DRF(0073_CTRL, _DP2X_ERR, _RESET_LINK, _NOERR, ltRmParams.pollingInfo)) &&
+    return ((FLD_TEST_DRF(0073_CTRL, _DP2X_ERR, _RESET_LINK, _NOERR, ltRmParams.err)) &&
             (FLD_TEST_DRF(0073_CTRL, _DP2X_POLLING_INFO, _RESULT, _DONE, ltRmParams.pollingInfo)));
 }
 

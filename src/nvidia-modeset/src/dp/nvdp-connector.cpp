@@ -101,6 +101,18 @@ NVDPLibConnectorPtr nvDPCreateConnector(NVConnectorEvoPtr pConnectorEvo)
     return NULL;
 }
 
+void nvDPSetClientForcedConnected(NVConnectorEvoPtr pConnectorEvo,
+    NvBool enabled)
+{
+    NVDPLibConnectorPtr pNVDpLibConnector = pConnectorEvo->pDpLibConnector;
+
+    if (!pNVDpLibConnector || !pNVDpLibConnector->isActive) {
+        return;
+    }
+
+    pNVDpLibConnector->connector->setClientForcedConnected(enabled == TRUE);
+}
+
 void nvDPNotifyLongPulse(NVConnectorEvoPtr pConnectorEvo,
                          NvBool connected)
 {
@@ -206,6 +218,7 @@ static NvU32 GetColorDepth(
 }
 
 static void SetDPMSATiming(const NVDispEvoRec *pDispEvo,
+                           const NVDpyEvoRec *pDpyEvo,
                            const NvU32 displayId,
                            NV0073_CTRL_CMD_DP_SET_MSA_PROPERTIES_PARAMS *msaParams,
                            const NVHwModeTimingsEvo *pTimings)
@@ -227,7 +240,8 @@ static void SetDPMSATiming(const NVDispEvoRec *pDispEvo,
 
     if ((displayId == 0x0) ||
         ((pTimings->yuv420Mode != NV_YUV420_MODE_SW) &&
-         !nvIsAdaptiveSyncDpyVrrType(pTimings->vrr.type))) {
+         ((pTimings->vrr.type == NVKMS_VRR_TYPE_NONE) ||
+          !nvIsAdaptiveSyncDpyVrrType(pDpyEvo->vrr.type)))) {
         return;
     }
 
@@ -249,7 +263,9 @@ static void SetDPMSATiming(const NVDispEvoRec *pDispEvo,
      * In case of Adaptive-Sync VRR, override VTotal field of MSA (Main Stream
      * Attributes) to workaround bug 4164132.
      */
-    if (nvIsAdaptiveSyncDpyVrrType(pTimings->vrr.type)) {
+    if ((pTimings->vrr.type != NVKMS_VRR_TYPE_NONE) &&
+        nvIsAdaptiveSyncDpyVrrType(pDpyEvo->vrr.type)) {
+
         featureMask->bRasterTotalVertical  = true;
         featureValues->rasterTotalVertical = pTimings->rasterSize.y;
     }
@@ -257,6 +273,7 @@ static void SetDPMSATiming(const NVDispEvoRec *pDispEvo,
 
 static void InitDpModesetParams(
     const NVDispEvoRec *pDispEvo,
+    const NVDpyEvoRec *pDpyEvo,
     const NvU32 head,
     const NvU32 displayId,
     const NVHwModeTimingsEvo *pTimings,
@@ -264,7 +281,7 @@ static void InitDpModesetParams(
     const enum NvKmsDpyAttributeColorBpcValue colorBpc,
     DisplayPort::DpModesetParams *pParams)
 {
-    pParams->modesetInfo.pixelClockHz = pTimings->pixelClock * 1000;
+    pParams->modesetInfo.pixelClockHz = pTimings->pixelClockHz;
     pParams->modesetInfo.rasterWidth  = pTimings->rasterSize.x;
     pParams->modesetInfo.rasterHeight = pTimings->rasterSize.y;
     pParams->modesetInfo.rasterBlankStartX = pTimings->rasterBlankStart.x;
@@ -297,7 +314,7 @@ static void InitDpModesetParams(
 
     pParams->headIndex = head;
 
-    SetDPMSATiming(pDispEvo, displayId, &pParams->msaparams, pTimings);
+    SetDPMSATiming(pDispEvo, pDpyEvo, displayId, &pParams->msaparams, pTimings);
 }
 
 NVDPLibModesetStatePtr nvDPLibCreateModesetState(
@@ -336,7 +353,10 @@ NVDPLibModesetStatePtr nvDPLibCreateModesetState(
         return NULL;
     }
 
+    pDpyEvo = nvGetOneArbitraryDpyEvo(dpyIdList, pDispEvo);
+
     InitDpModesetParams(pDispEvo,
+                        pDpyEvo,
                         head,
                         displayId,
                         pTimings,
@@ -455,7 +475,10 @@ static NvBool ConstructDpLibIsModesetPossibleParamsOneHead(
         goto failed;
     }
 
+    pDpyEvo = nvGetOneArbitraryDpyEvo(dpyIdList, pDispEvo);
+
     InitDpModesetParams(pDispEvo,
+                        pDpyEvo,
                         head,
                         displayId,
                         pTimings,
@@ -521,8 +544,6 @@ static NvBool ConstructDpLibIsModesetPossibleParamsOneHead(
     }
 
     if (pTimings->dscPassThrough) {
-        const NVDpyEvoRec *pDpyEvo =
-            nvGetOneArbitraryDpyEvo(dpyIdList, pDispEvo);
         const NVT_DISPLAYID_2_0_INFO *pDisplyIdInfo =
             &pDpyEvo->parsedEdid.info.ext_displayid20;
         const NVT_DISPLAYID_VENDOR_SPECIFIC *pDisplayIdVS =

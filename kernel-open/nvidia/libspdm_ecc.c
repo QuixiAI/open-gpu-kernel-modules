@@ -1,5 +1,5 @@
 /*
-* SPDX-FileCopyrightText: Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+* SPDX-FileCopyrightText: Copyright (c) 2023-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 * SPDX-License-Identifier: MIT
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
@@ -24,9 +24,6 @@
 #include "internal_crypt_lib.h"
 
 #ifdef USE_LKCA
-#include <linux/module.h>
-MODULE_SOFTDEP("pre: ecdh_generic,ecdsa_generic");
-
 #include <crypto/akcipher.h>
 #include <crypto/ecdh.h>
 #include <crypto/internal/ecc.h>
@@ -301,7 +298,7 @@ static bool lkca_ecdsa_verify_akcipher(void *ec_context, size_t hash_nid,
 #else // USE_LKCA
     struct ecc_ctx *ctx = ec_context;
     u8 *pub_key;
-    int err;
+    int err = -EINVAL;
     DECLARE_CRYPTO_WAIT(wait);
 
     // Roundabout way

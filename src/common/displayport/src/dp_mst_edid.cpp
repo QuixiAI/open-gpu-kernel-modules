@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2010-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2010-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -46,15 +46,16 @@ void EdidReadMultistream::startReadingEdid()
 {
     NvU8 offset = 0;
     I2cWriteTransaction i2cWriteTransactions[1];
-    Address::StringBuffer buffer;
-    DP_USED(buffer);
-    DP_PRINTF(DP_NOTICE, "%s(): start for %s", __FUNCTION__,
-                                      topologyAddress.toString(buffer));
+    NvU64 packedAddr = (topologyAddress).pack();
+    DP_PRINTF(DP_NOTICE, "start for " DP_ADDR_FMT,
+                                      DP_ADDR_ARGS(packedAddr));
+    DP_USED(packedAddr);
 
     edidReaderManager.reset();
     edid.resetData();
 
     DDCAddress = ddcAddrList[ddcIndex];
+    i2c_retry = 0;
 
     // set offset within segment 0, no need to set segment, because we're starting reading EDID
     i2cWriteTransactions[0] = I2cWriteTransaction(DDCAddress >> 1,
@@ -85,12 +86,12 @@ void EdidReadMultistream::messageCompleted(MessageManager::Message * from)
     RemoteI2cReadMessage* I2CReadMessage = (RemoteI2cReadMessage*)from;
     unsigned char * data = 0;
     unsigned numBytesRead;
-    Address::StringBuffer buffer;
-    DP_USED(buffer);
 
     NvU8 seg;
     NvU8 offset;
-    DP_PRINTF(DP_NOTICE, "%s for %s", __FUNCTION__, topologyAddress.toString(buffer));
+    NvU64 packedAddr = (topologyAddress).pack();
+    DP_PRINTF(DP_NOTICE, "completed for " DP_ADDR_FMT, DP_ADDR_ARGS(packedAddr));
+    DP_USED(packedAddr);
 
     DP_ASSERT(DDCAddress && "DDCAddress is 0, it is wrong");
 
@@ -127,16 +128,15 @@ void EdidReadMultistream::edidAttemptDone(bool succeeded)
 void EdidReadMultistream::readNextBlock(NvU8 seg, NvU8 offset)
 {
     I2cWriteTransaction i2cWriteTransactions[2];
-    Address::StringBuffer buffer;
-    DP_USED(buffer);
 
     // ensure that init function for i2cWriteTranscation for segment and offset won't break
     DP_ASSERT(sizeof(seg) == 1);
     DP_ASSERT(sizeof(offset) == 1);
 
-    DP_PRINTF(DP_NOTICE, "%s(): for %s (seg/offset) = %d/%d", __FUNCTION__,
-                                      topologyAddress.toString(buffer),
-                                      seg, offset);
+    NvU64 packedAddr = (topologyAddress).pack();
+    DP_PRINTF(DP_NOTICE, "for " DP_ADDR_FMT " (seg/offset) = %d/%d",
+              DP_ADDR_ARGS(packedAddr), seg, offset);
+    DP_USED(packedAddr);
 
     unsigned nWriteTransactions = 2;
     if (seg)
@@ -174,17 +174,17 @@ void EdidReadMultistream::readNextBlock(NvU8 seg, NvU8 offset)
 
 void EdidReadMultistream::expired(const void * tag)
 {
-    Address::StringBuffer buffer;
-    DP_USED(buffer);
-    DP_PRINTF(DP_NOTICE, "%s on %s", __FUNCTION__, topologyAddress.toString(buffer));
+    NvU64 packedAddr = (topologyAddress).pack();
+    DP_PRINTF(DP_NOTICE, "expired on " DP_ADDR_FMT, DP_ADDR_ARGS(packedAddr));
+    DP_USED(packedAddr);
     startReadingEdid();
 }
 
 void EdidReadMultistream::messageFailed(MessageManager::Message * from, NakData * nakData)
 {
-    Address::StringBuffer buffer;
-    DP_USED(buffer);
-    DP_PRINTF(DP_NOTICE, "%s on %s", __FUNCTION__, topologyAddress.toString(buffer));
+    NvU64 packedAddr = (topologyAddress).pack();
+    DP_PRINTF(DP_NOTICE, "messageFailed on " DP_ADDR_FMT, DP_ADDR_ARGS(packedAddr));
+    DP_USED(packedAddr);
 
     if (nakData->reason == NakDefer || nakData->reason == NakTimeout)
     {
@@ -196,8 +196,19 @@ void EdidReadMultistream::messageFailed(MessageManager::Message * from, NakData 
         else
             edidAttemptDone(false /* failed */);
     }
+    else if (nakData->reason == NakI2cNak)
+    {
+        if (i2c_retry < MST_EDID_I2C_NACK_RETRIES)
+        {
+            ++i2c_retry;
+            timer->queueCallback(this, "EDID", MST_EDID_COOLDOWN);
+        }
+        else
+            edidAttemptDone(false /* failed */);
+    }
     else
     {
+        DP_PRINTF(DP_NOTICE, "%d: Unknown reason, retries: %d", nakData->reason, retries);
         edidAttemptDone(false /* failed */);
     }
 }

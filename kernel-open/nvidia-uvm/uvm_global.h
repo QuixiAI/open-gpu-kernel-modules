@@ -125,6 +125,9 @@ struct uvm_global_struct
 
     bool cdmm_enabled;
 
+    // Indicates whether there is a non-ATS GPU in the system.
+    bool have_non_ats_devices;
+
     // List of all active VA spaces
     struct
     {
@@ -159,6 +162,12 @@ struct uvm_global_struct
     // This field is set once during global initialization (uvm_global_init),
     // and can be read afterwards without acquiring any locks.
     bool conf_computing_enabled;
+
+    // True if TDISP is enabled on the platform.
+    //
+    // This field is set once during global initialization (uvm_global_init),
+    // and can be read afterwards without acquiring any locks.
+    bool tdisp_enabled;
 
     // List of all devmem ranges allocted on this GPU
     struct {

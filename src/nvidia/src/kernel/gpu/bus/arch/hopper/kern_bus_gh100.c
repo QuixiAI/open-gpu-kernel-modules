@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -22,6 +22,7 @@
  */
 
 #include "core/core.h"
+#include "core/locks.h"
 #include "gpu/gpu.h"
 
 #include <class/cl00fc.h>      // FABRIC_VASPACE_A
@@ -69,6 +70,113 @@
 #define NV_WPR_BLOCK_GRANULARITY 0x20000ULL
 
 /*!
+ * @brief Bind BAR1 to an invalid instance block
+ *
+ * BMSAI runs with the MMU CC checks disabled, so a BAR left resolvable after
+ * the driver is gone is a direct vidmem window for the untrusted host. GSP-FMC
+ * binds both BARs to an invalid instance block at bring-up
+ * (bmsaiRebindBar_GB100); RM restores that state on teardown. Bug 6801329.
+ *
+ * @param[in] pGpu  OBJGPU pointer
+ *
+ * @returns NV_OK on success.
+ */
+static NV_STATUS
+_kbusBindBar1ToInvalidInstBlk_GH100(OBJGPU *pGpu)
+{
+    RMTIMEOUT timeout;
+    NvU32     temp;
+    NV_STATUS status = NV_OK;
+
+    // LOW must be written first; the write to HIGH triggers the bind.
+    GPU_VREG_WR32(pGpu, NV_VIRTUAL_FUNCTION_PRIV_FUNC_BAR1_BLOCK_LOW_ADDR,
+            DRF_NUM(_VIRTUAL_FUNCTION_PRIV_FUNC, _BAR1_BLOCK_LOW_ADDR, _PTR, 0xfffff) |
+            DRF_DEF(_VIRTUAL_FUNCTION_PRIV_FUNC, _BAR1_BLOCK_LOW_ADDR, _MODE, _VIRTUAL) |
+            DRF_DEF(_VIRTUAL_FUNCTION_PRIV_FUNC, _BAR1_BLOCK_LOW_ADDR, _TARGET, _VID_MEM));
+
+    GPU_VREG_WR32(pGpu, NV_VIRTUAL_FUNCTION_PRIV_FUNC_BAR1_BLOCK_HIGH_ADDR,
+            DRF_NUM(_VIRTUAL_FUNCTION_PRIV_FUNC, _BAR1_BLOCK_HIGH_ADDR, _PTR, 0xffffffff));
+
+    osFlushCpuWriteCombineBuffer();
+
+    gpuSetTimeout(pGpu, GPU_TIMEOUT_DEFAULT, &timeout, 0);
+    do
+    {
+        temp = GPU_VREG_RD32(pGpu, NV_VIRTUAL_FUNCTION_PRIV_FUNC_BAR1_BLOCK_LOW_ADDR);
+
+        if (FLD_TEST_DRF(_VIRTUAL_FUNCTION_PRIV_FUNC, _BAR1_BLOCK_LOW_ADDR, _BAR1_PENDING, _EMPTY, temp) &&
+            FLD_TEST_DRF(_VIRTUAL_FUNCTION_PRIV_FUNC, _BAR1_BLOCK_LOW_ADDR, _BAR1_OUTSTANDING, _FALSE, temp))
+        {
+            break;
+        }
+
+        if (status == NV_ERR_TIMEOUT)
+        {
+            NV_PRINTF(LEVEL_ERROR, "timed out binding BAR1 to the invalid instance block\n");
+            DBG_BREAKPOINT();
+            break;
+        }
+
+        status = gpuCheckTimeout(pGpu, &timeout);
+        osSpinLoop();
+    } while (1);
+
+    return status;
+}
+
+/*!
+ * @brief Bind BAR2 to an invalid instance block
+ *
+ * BAR2 counterpart of _kbusBindBar1ToInvalidInstBlk_GH100. Note the HIGH_ADDR
+ * PTR field is only 19:0 here, unlike BAR1's 31:0.
+ *
+ * @param[in] pGpu  OBJGPU pointer
+ *
+ * @returns NV_OK on success.
+ */
+static NV_STATUS
+_kbusBindBar2ToInvalidInstBlk_GH100(OBJGPU *pGpu)
+{
+    RMTIMEOUT timeout;
+    NvU32     temp;
+    NV_STATUS status = NV_OK;
+
+    GPU_VREG_WR32(pGpu, NV_VIRTUAL_FUNCTION_PRIV_FUNC_BAR2_BLOCK_LOW_ADDR,
+            DRF_NUM(_VIRTUAL_FUNCTION_PRIV_FUNC, _BAR2_BLOCK_LOW_ADDR, _PTR, 0xfffff) |
+            DRF_DEF(_VIRTUAL_FUNCTION_PRIV_FUNC, _BAR2_BLOCK_LOW_ADDR, _MODE, _VIRTUAL) |
+            DRF_DEF(_VIRTUAL_FUNCTION_PRIV_FUNC, _BAR2_BLOCK_LOW_ADDR, _TARGET, _VID_MEM));
+
+    GPU_VREG_WR32(pGpu, NV_VIRTUAL_FUNCTION_PRIV_FUNC_BAR2_BLOCK_HIGH_ADDR,
+            DRF_NUM(_VIRTUAL_FUNCTION_PRIV_FUNC, _BAR2_BLOCK_HIGH_ADDR, _PTR, 0xfffff));
+
+    osFlushCpuWriteCombineBuffer();
+
+    gpuSetTimeout(pGpu, GPU_TIMEOUT_DEFAULT, &timeout, 0);
+    do
+    {
+        temp = GPU_VREG_RD32(pGpu, NV_VIRTUAL_FUNCTION_PRIV_FUNC_BAR2_BLOCK_LOW_ADDR);
+
+        if (FLD_TEST_DRF(_VIRTUAL_FUNCTION_PRIV_FUNC, _BAR2_BLOCK_LOW_ADDR, _BAR2_PENDING, _EMPTY, temp) &&
+            FLD_TEST_DRF(_VIRTUAL_FUNCTION_PRIV_FUNC, _BAR2_BLOCK_LOW_ADDR, _BAR2_OUTSTANDING, _FALSE, temp))
+        {
+            break;
+        }
+
+        if (status == NV_ERR_TIMEOUT)
+        {
+            NV_PRINTF(LEVEL_ERROR, "timed out binding BAR2 to the invalid instance block\n");
+            DBG_BREAKPOINT();
+            break;
+        }
+
+        status = gpuCheckTimeout(pGpu, &timeout);
+        osSpinLoop();
+    } while (1);
+
+    return status;
+}
+
+/*!
  * @brief Tear Down BAR1 Mailbox
  *
  * Destroys Bar1 VA Space.
@@ -86,6 +194,16 @@ kbusTeardownMailbox_GH100
 )
 {
     NvU32 bar1Block = 0;
+
+    //
+    // Under BMSAI vidmem must stay unreachable from PCIe after unload, so
+    // rebind rather than falling through to physical mode. Bug 6801329.
+    //
+    if (gpuIsBaremetalSecureAiEnabled(pGpu) && !gpuIsCCDevToolsModeEnabled(pGpu))
+    {
+        (void)_kbusBindBar1ToInvalidInstBlk_GH100(pGpu);
+        return;
+    }
 
     // set bar1 mode to physical and vidmem so we don't accidentally corrupt sysmem
     bar1Block = GPU_VREG_RD32(pGpu, NV_VIRTUAL_FUNCTION_PRIV_FUNC_BAR1_BLOCK_LOW_ADDR);
@@ -278,7 +396,7 @@ kbusVerifyBar2_GH100
     NvU32             testData         = 0;
     NvU32             temp             = 0;
     NV_ADDRESS_SPACE  testAddrSpace    = ADDR_FBMEM;
-    NvBool            bIsStandaloneTest;
+    NvBool            bIsStandaloneTest = NV_FALSE;
     const NvU32       SAMPLEDATA       = 0xabcdabcd;
     const NvU32       FBSIZETESTED     = 0x10;
     NvU64             bar0TestAddr     = 0;
@@ -325,7 +443,6 @@ kbusVerifyBar2_GH100
             DBG_BREAKPOINT();
             return NV_ERR_INVALID_ARGUMENT;
         }
-        bIsStandaloneTest = NV_FALSE;
         pOffset = pCpuPtrIn;
         pMemDesc = pMemDescIn;
     }
@@ -342,24 +459,25 @@ kbusVerifyBar2_GH100
         {
             memdescCreateExisting(&memDesc, pGpu, size, ADDR_FBMEM, NV_MEMORY_UNCACHED, MEMDESC_FLAGS_NONE);
         }
-        memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_95, 
+        bIsStandaloneTest = NV_TRUE;
+        pMemDesc = &memDesc;
+
+        memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_95,
                         (&memDesc));
         if (status != NV_OK)
         {
             NV_PRINTF(LEVEL_ERROR,
                       "Could not allocate vidmem to test bar2 with\n");
             DBG_BREAKPOINT();
-            return NV_ERR_GENERIC;
+            goto kbusVerifyBar2_failed;
         }
 
-        bIsStandaloneTest = NV_TRUE;
         pOffset = kbusMapRmAperture_HAL(pGpu, &memDesc);
         if (pOffset == NULL)
         {
             status = NV_ERR_INSUFFICIENT_RESOURCES;
             goto kbusVerifyBar2_failed;
         }
-        pMemDesc = &memDesc;
     }
     testMemoryOffset = memdescGetPhysAddr(pMemDesc, AT_GPU, 0) + offset;
     testMemorySize   = NvU64_LO32(size);
@@ -621,6 +739,7 @@ kbusTeardownBar2CpuAperture_GH100
         pKernelBus->virtualBar2[gfid].pPageLevels = NULL;
     }
 
+    kfifoUnmapVfPage(pGpu, GPU_GET_KERNEL_FIFO(pGpu));
     kbusDestroyCpuPointerForBusFlush_HAL(pGpu, pKernelBus);
 
     kbusFlushVirtualBar2_HAL(pGpu, pKernelBus, NV_FALSE, gfid);
@@ -643,6 +762,15 @@ kbusTeardownBar2CpuAperture_GH100
     //
     if (!pGpu->getProperty(pGpu, PDB_PROP_GPU_BROKEN_FB))
     {
+        //
+        // There is no VESA console to preserve on a BMSAI part, and a physical
+        // BAR2 would expose vidmem to the untrusted host. Bug 6801329.
+        //
+        if (gpuIsBaremetalSecureAiEnabled(pGpu) && !gpuIsCCDevToolsModeEnabled(pGpu))
+        {
+            return _kbusBindBar2ToInvalidInstBlk_GH100(pGpu);
+        }
+
         GPU_VREG_FLD_WR_DRF_DEF(pGpu, _VIRTUAL_FUNCTION_PRIV_FUNC, _BAR2_BLOCK_LOW_ADDR, _MODE, _PHYSICAL);
         // bug 1738008: temporary fix to unblock -inst_in_sys argument
         // we tried to correct bar2 unbind sequence but didn't fix the real issue
@@ -787,16 +915,6 @@ kbusSetupP2PDomainAccess_GH100
     return kbusSetupPeerBarAccess(pGpu0, pGpu1,
                 pGpu0->busInfo.gpuPhysAddr + pXalAperture->baseAddress,
                 DRF_SIZE(NV_XAL_EP_P2P_ZB), ppP2PDomMemDesc);
-}
-
-NV_STATUS
-kbusFlushPcieForBar0Doorbell_GH100
-(
-    OBJGPU      *pGpu,
-    KernelBus   *pKernelBus
-)
-{
-    return kbusFlush_HAL(pGpu, pKernelBus, BUS_FLUSH_VIDEO_MEMORY);
 }
 
 /*!
@@ -1004,6 +1122,7 @@ kbusCarveoutWprs_GH100
  * @param[in] pKernelBus            Kernel bus pointer
  * @param[in] numaOnlineMemorySize  Size of FB memory to online in
  *                                  kernel as a NUMA node
+ * @param[in] cpuVisibleFbSize      FB size allowed to be accessed by CPU
  * @param[in] bFlush                Flush CPU cache or not
  *
  * @return 'NV_OK' if successful, an RM error code otherwise.
@@ -1014,6 +1133,7 @@ kbusCreateCoherentCpuMapping_GH100
     OBJGPU    *pGpu,
     KernelBus *pKernelBus,
     NvU64     numaOnlineMemorySize,
+    NvU64     cpuVisibleFbSize,
     NvBool    bFlush
 )
 {
@@ -1022,7 +1142,6 @@ kbusCreateCoherentCpuMapping_GH100
     NV_STATUS           status                     = NV_OK;
     KernelBif          *pKernelBif                 = GPU_GET_KERNEL_BIF(pGpu);
     NvP64               pCpuMapping                = NvP64_NULL;
-    NvU64               fbSize;
     NvU64               busAddrStart[COHERENT_CPU_MAPPING_TOTAL_REGIONS];
     NvU64               busAddrSize[COHERENT_CPU_MAPPING_TOTAL_REGIONS];
     NvU32               i;
@@ -1042,9 +1161,10 @@ kbusCreateCoherentCpuMapping_GH100
     NV_ASSERT_OR_RETURN(listCount(&pKernelBus->virtualBar2[GPU_GFID_PF].usedMapList) == 0,
                         NV_ERR_INVALID_STATE);
 
-    fbSize = (pMemoryManager->Ram.fbTotalMemSizeMb << 20);
-
-    NV_ASSERT_OK_OR_RETURN(osNumaMemblockSize(&memblockSize));
+    if (osNumaOnliningEnabled(pGpu->pOsGpuInfo))
+    {
+        NV_ASSERT_OK_OR_RETURN(osNumaMemblockSize(&memblockSize));
+    }
 
     // NUMA region
     pKernelBus->coherentCpuMapping.physAddr[COHERENT_CPU_MAPPING_REGION_0] = pMemoryManager->Ram.fbRegion[0].base;
@@ -1054,7 +1174,7 @@ kbusCreateCoherentCpuMapping_GH100
     pKernelBus->coherentCpuMapping.nrMapping = 1;
 
     start = pMemoryManager->Ram.fbRegion[0].base + numaOnlineMemorySize;
-    end = pMemoryManager->Ram.fbRegion[0].base + fbSize;
+    end = pMemoryManager->Ram.fbRegion[0].base + cpuVisibleFbSize;
 
     // reserved regions
     if (start != end)
@@ -1066,18 +1186,18 @@ kbusCreateCoherentCpuMapping_GH100
         {
             // carving out WPRs
             kbusCarveoutWprs_HAL(pGpu, pKernelBus, wprRegions);
-        
+
             NV_PRINTF(LEVEL_INFO, "wpr1 0x%llx->0x%llx, wpr2 0x%llx->0x%llx\n",
                 wprRegions[0].lo, wprRegions[0].hi, wprRegions[1].lo, wprRegions[1].hi);
-        
+
             status = rangesCarveout(
                 reservedRegions, COHERENT_CPU_MAPPING_TOTAL_REGIONS - 1,
                 &numReservedRegions, wprRegions, 2);
-        
+
             NV_ASSERT_OR_RETURN(status == NV_OK, NV_ERR_GENERIC);
             NV_ASSERT(numReservedRegions <= COHERENT_CPU_MAPPING_TOTAL_REGIONS - 1);
         }
-    
+
         for (i = 0; i < numReservedRegions; ++i)
         {
             pKernelBus->coherentCpuMapping.physAddr[pKernelBus->coherentCpuMapping.nrMapping] =
@@ -1195,8 +1315,9 @@ kbusVerifyCoherentLink_GH100
     }
 
     memdescCreateExisting(&memDesc, pGpu, size, ADDR_FBMEM, NV_MEMORY_CACHED, MEMDESC_FLAGS_NONE);
+    pMemDesc = &memDesc;
 
-    memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_95, 
+    memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_95,
                     (&memDesc));
     if (status != NV_OK)
     {
@@ -1213,8 +1334,6 @@ kbusVerifyCoherentLink_GH100
         status = NV_ERR_INSUFFICIENT_RESOURCES;
         goto busVerifyCoherentLink_failed;
     }
-    pMemDesc = &memDesc;
-
     NV_PRINTF_COND(IS_EMULATION(pGpu), LEVEL_ERROR, LEVEL_INFO,
                    "Coherent link test buffer PA: 0x%llx\n",
                    memdescGetPhysAddr(pMemDesc, AT_CPU, 0));
@@ -1225,7 +1344,7 @@ kbusVerifyCoherentLink_GH100
     }
 
     // Ensure the writes are flushed out of the CPU caches.
-    osFlushGpuCoherentCpuCacheRange(pGpu->pOsGpuInfo, (NvUPtr)pOffset, size);
+    kmemsysFlushCoherentCpuCache(pGpu, pKernelMemorySystem, (NvUPtr)pOffset, size);
 
     // L2 invalidate registers are not present in VF BAR0. PF driver should have tested this on host so
     // skipping this on SRIOV guest
@@ -1342,8 +1461,10 @@ kbusMapCoherentCpuMapping_GH100
     RmPhysAddr startAddr    = memdescGetPhysAddr(pMemDesc, FORCE_VMMU_TRANSLATION(pMemDesc, AT_GPU), offset);
     NvU8       i            = 0;
 
-    // Use osMapSystemMemory if GPU FB is onlined to kernel as a NUMA node OR running on MODS, else use static mapping.
-    if (osNumaOnliningEnabled(pGpu->pOsGpuInfo) || RMCFG_FEATURE_MODS_FEATURES)
+    // Use osMapSystemMemory if GPU FB is onlined to kernel as a NUMA node OR running on MODS
+    // without static mapping override, else use static mapping.
+    if (osNumaOnliningEnabled(pGpu->pOsGpuInfo) || (RMCFG_FEATURE_MODS_FEATURES &&
+         !pKernelBus->bCoherentFbStaticKernelMapping))
     {
         if (_kbusMemoryIsInFbRegion(pKernelBus, pMemDesc, offset, COHERENT_CPU_MAPPING_RM_KERNEL_ONLINED_REGION))
         {
@@ -1395,11 +1516,13 @@ kbusUnmapCoherentCpuMapping_GH100
     NvP64                pPriv
 )
 {
-    NvU8 regionIndex = COHERENT_CPU_MAPPING_RM_KERNEL_ONLINED_REGION;
-    NvU8 i           = 0;
+    NvU8  regionIndex   = COHERENT_CPU_MAPPING_RM_KERNEL_ONLINED_REGION;
+    NvU8  i             = 0;
 
-    // Use osMapSystemMemory if GPU FB is onlined to kernel as a NUMA node OR running on MODS, else use static mapping.
-    if (osNumaOnliningEnabled(pGpu->pOsGpuInfo) || RMCFG_FEATURE_MODS_FEATURES)
+    // Use osMapSystemMemory if GPU FB is onlined to kernel as a NUMA node OR running on MODS
+    // without static mapping override, else use static mapping.
+    if (osNumaOnliningEnabled(pGpu->pOsGpuInfo) || (RMCFG_FEATURE_MODS_FEATURES &&
+         !pKernelBus->bCoherentFbStaticKernelMapping))
     {
         if (_kbusMemoryIsInFbRegion(pKernelBus, pMemDesc, 0, COHERENT_CPU_MAPPING_RM_KERNEL_ONLINED_REGION))
         {
@@ -1706,8 +1829,16 @@ kbusHasPcieBar1P2PMapping_GH100
     KernelBus *pKernelBus1
 )
 {
-    return ((pKernelBus0->p2pPcieBar1.busBar1PeerRefcount[gpuGetInstance(pGpu1)] != 0) &&
-            (pKernelBus1->p2pPcieBar1.busBar1PeerRefcount[gpuGetInstance(pGpu0)] != 0));
+    NvU32 gpuInst0 = gpuGetInstance(pGpu0);
+    NvU32 gpuInst1 = gpuGetInstance(pGpu1);
+
+    NV_ASSERT_OR_RETURN(rmGpuLockIsOwner() ||
+                        (rmDeviceGpuLockIsOwner(gpuInst0) &&
+                         rmDeviceGpuLockIsOwner(gpuInst1)),
+                        NV_FALSE);
+
+    return ((pKernelBus0->p2pPcieBar1.busBar1PeerRefcount[gpuInst1] != 0) &&
+            (pKernelBus1->p2pPcieBar1.busBar1PeerRefcount[gpuInst0] != 0));
 }
 
 /*!
@@ -1740,6 +1871,11 @@ kbusCreateP2PMappingForBar1P2P_GH100
     {
         return NV_ERR_NOT_SUPPORTED;
     }
+
+    NV_ASSERT_OR_RETURN(rmGpuLockIsOwner() ||
+                        (rmDeviceGpuLockIsOwner(gpuInst0) &&
+                         rmDeviceGpuLockIsOwner(gpuInst1)),
+                        NV_ERR_INVALID_LOCK_STATE);
 
     if (!kbusIsPcieBar1P2PMappingSupported_HAL(pGpu0, pKernelBus0, pGpu1, pKernelBus1))
     {
@@ -1793,6 +1929,11 @@ kbusRemoveP2PMappingForBar1P2P_GH100
 
     gpuInst0 = gpuGetInstance(pGpu0);
     gpuInst1 = gpuGetInstance(pGpu1);
+
+    NV_ASSERT_OR_RETURN(rmGpuLockIsOwner() ||
+                        (rmDeviceGpuLockIsOwner(gpuInst0) &&
+                         rmDeviceGpuLockIsOwner(gpuInst1)),
+                        NV_ERR_INVALID_LOCK_STATE);
 
     if ((pKernelBus0->p2pPcieBar1.busBar1PeerRefcount[gpuInst1] == 0) ||
         (pKernelBus1->p2pPcieBar1.busBar1PeerRefcount[gpuInst0] == 0))
@@ -2236,7 +2377,6 @@ kbusAllocateFlaVaspace_GH100
     KernelGmmu  *pKernelGmmu  = GPU_GET_KERNEL_GMMU(pGpu);
     INST_BLK_INIT_PARAMS pInstblkParams = {0};
     FABRIC_VASPACE *pFabricVAS;
-    RM_API   *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
 
     NV_ASSERT_OR_RETURN(pGpu != NULL, NV_ERR_INVALID_ARGUMENT);
     NV_ASSERT_OR_RETURN(size != 0, NV_ERR_INVALID_ARGUMENT);
@@ -2253,11 +2393,8 @@ kbusAllocateFlaVaspace_GH100
         return kbusAllocateFlaVaspace_GA100(pGpu, pKernelBus, base, size);
     }
 
-    // TODO: Remove allocating legaccy FLA Vaspace once CUDA removes the dependency
-    NV_ASSERT_OK_OR_RETURN(kbusAllocateLegacyFlaVaspace_HAL(pGpu, pKernelBus, base, size));
-
     // Allocate a FABRIC_VASPACE_A object
-    status = vmmCreateVaspace(pVmm, FABRIC_VASPACE_A, pGpu->gpuId, gpumgrGetGpuMask(pGpu),
+    status = vmmCreateVaspace(pVmm, FABRIC_VASPACE_A, pGpu->gpuId, pGpu,
                               base, base + size - 1, 0, 0, NULL, 0,
                               &pGpu->pFabricVAS);
 
@@ -2289,10 +2426,11 @@ kbusAllocateFlaVaspace_GH100
 
     pFabricVAS = dynamicCast(pGpu->pFabricVAS, FABRIC_VASPACE);
 
-    // Instantiate Inst Blk for pFlaVAS
+    // Instantiate Inst Blk for the fabric VAS
     status = kgmmuInstBlkInit(pKernelGmmu,
                                 pKernelBus->flaInfo.pInstblkMemDesc,
-                                pFabricVAS->pGVAS, FIFO_PDB_IDX_BASE,
+                                pFabricVAS->pGVAS, NULL,
+                                FIFO_PDB_IDX_BASE,
                                 &pInstblkParams);
     if (status != NV_OK)
     {
@@ -2361,9 +2499,6 @@ cleanup:
         pGpu->pFabricVAS = NULL;
     }
 
-    // TODO: remove this once legacy FLA VAS support is removed.
-    pRmApi->Free(pRmApi, pKernelBus->flaInfo.hClient, pKernelBus->flaInfo.hClient);
-
     pKernelBus->flaInfo.bFlaAllocated = NV_FALSE;
 
     NV_PRINTF(LEVEL_ERROR, "failed allocating FLA VASpace status=0x%x\n",
@@ -2381,7 +2516,6 @@ kbusDestroyFla_GH100
 {
     OBJSYS *pSys   = SYS_GET_INSTANCE();
     OBJVMM *pVmm   = SYS_GET_VMM(pSys);
-    RM_API   *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
 
     if (pGpu->pFabricVAS != NULL)
     {
@@ -2400,8 +2534,6 @@ kbusDestroyFla_GH100
             vmmDestroyVaspace(pVmm, pGpu->pFabricVAS);
 
             pGpu->pFabricVAS = NULL;
-            // TODO: Remove this once legacy FLA  VAS support is deprecated
-            pRmApi->Free(pRmApi, pKernelBus->flaInfo.hClient, pKernelBus->flaInfo.hClient);
             portMemSet(&pKernelBus->flaInfo, 0, sizeof(pKernelBus->flaInfo));
         }
     }
@@ -2930,7 +3062,7 @@ kbusBar1InstBlkBind_GH100
 NvU32
 kbusGetEccCounts_GH100
 (
-    OBJGPU *pGpu,
+    OBJGPU    *pGpu,
     KernelBus *pKernelBus
 )
 {
@@ -2950,22 +3082,31 @@ kbusGetEccCounts_GH100
 }
 
 /*!
- * @brief This function issues a sysmembar by writing to NV_XAL_EP_UFLUSH_FB_FLUSH, which
- * tells HOST unit to flush all outstanding writes to the GPU from the PCIE path.
- * It guarantees any writes to the FB before the sysmembar has taken effect on the GPU
- * on the PCIE path.
+ * @brief This function issues an XAL-UFLUSH-based sysmembar by writing to
+ * NV_XAL_EP_UFLUSH_FB_FLUSH, which tells HOST unit to flush all outstanding
+ * writes to the GPU from the PCIE path. It guarantees any writes to the FB
+ * before the sysmembar has taken effect on the GPU on the PCIE path.
  *
  * Hopper replaces common pending/outstanding bit in memops with a token system.
- * To trigger a memop, SW issues a read of theregister as opposed to write of the memop.
- * This read would trigger an injection of the memop in HW. Once HW injects the memop
- * into the pipeline a free running token counter is incremented. The read return value
- * for this memop would be the value of the trigger token
- *
+ * To trigger a memop, SW issues a read of the register as opposed to write of
+ * the memop. This read would trigger an injection of the memop in HW. Once HW
+ * injects the memop into the pipeline a free running token counter is
+ * incremented. The read return value for this memop would be the value of the
+ * trigger token.
  *
  * NOTE: Must be called inside a SLI loop
+ *
+ * @param[in] pGpu        OBJGPU pointer
+ * @param[in] pKernelBus  KernelBus pointer
+ *
+ * @returns NV_STATUS - Status
  */
 NV_STATUS
-kbusSendSysmembarSingle_GH100(OBJGPU *pGpu, KernelBus *pKernelBus)
+kbusSendSysmembarSingleWithXalUflush_GH100
+(
+    OBJGPU    *pGpu,
+    KernelBus *pKernelBus
+)
 {
     NV_STATUS    status = NV_OK;
     NV_STATUS    timeoutStatus = NV_OK;
@@ -3061,10 +3202,32 @@ kbusSendSysmembarSingle_GH100(OBJGPU *pGpu, KernelBus *pKernelBus)
     return status;
 }
 
+/*!
+ * @brief This function issues an XAL-UFLUSH-based sysmembar, which tells HOST
+ * unit to flush all outstanding writes to the GPU from the PCIE path. It
+ * guarantees any writes to the FB before the sysmembar has taken effect on the
+ * GPU on the PCIE path. See implementation of
+ * kbusSendSysmembarSingleWithXalUflush_GH100 for details.
+ *
+ * @param[in] pGpu        OBJGPU pointer
+ * @param[in] pKernelBus  KernelBus pointer
+ *
+ * @returns NV_STATUS - Status
+ */
+NV_STATUS
+kbusSendSysmembarSingle_GH100
+(
+    OBJGPU    *pGpu,
+    KernelBus *pKernelBus
+)
+{
+    return kbusSendSysmembarSingleWithXalUflush_HAL(pGpu, pKernelBus);
+}
+
 NV_STATUS
 kbusConstructXalApertures_GH100
 (
-    OBJGPU *pGpu,
+    OBJGPU    *pGpu,
     KernelBus *pKernelBus
 )
 {

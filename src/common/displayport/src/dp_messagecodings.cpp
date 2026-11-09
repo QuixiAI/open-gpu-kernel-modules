@@ -117,10 +117,33 @@ bool ConnStatusNotifyMessage::processByType(EncodedMessage * message, BitStreamR
 //
 // GENERIC_UP_REPLY   0xnn
 //
+// Append the 18-byte NAK body (16-byte GUID + 8-bit NAK_Reason + 8-bit
+// NAK_Data) that follows the 1-byte reply header. NULL nakGuid = zero GUID.
+//
+static void writeNakBody(BitStreamWriter & writer,
+                         const GUID * nakGuid,
+                         unsigned nakReason,
+                         unsigned nakData)
+{
+    GUID zeroGuid;
+    const GUID & g = nakGuid ? *nakGuid : zeroGuid;
+
+    for (unsigned i = 0; i < DPCD_GUID_SIZE; i++)
+    {
+        writer.write(g.data[i], 8);
+    }
+
+    writer.write(nakReason & 0xFF, 8);
+    writer.write(nakData   & 0xFF, 8);
+}
+
 void GenericUpReplyMessage::set(const Address & target,
                                 bool bReplyIsNack,
                                 bool bBroadcast,
-                                bool bPath)
+                                bool bPath,
+                                const GUID * nakGuid,
+                                unsigned nakReason,
+                                unsigned nakData)
 {
     clear();
     BitStreamWriter writer(&encodedMessage.buffer, 0);
@@ -128,12 +151,21 @@ void GenericUpReplyMessage::set(const Address & target,
     writer.write(bReplyIsNack?1:0, 1);
     writer.write(requestIdentifier, 7);
 
+    if (bReplyIsNack)
+    {
+        writeNakBody(writer, nakGuid, nakReason, nakData);
+    }
+
     encodedMessage.isPathMessage = bPath;
     encodedMessage.isBroadcast  = bBroadcast;
     encodedMessage.address = target;
 }
 
-GenericUpReplyMessage::GenericUpReplyMessage(unsigned requestId, bool bReplyIsNack, bool bBroadcast, bool bPath)
+GenericUpReplyMessage::GenericUpReplyMessage(unsigned requestId, bool bReplyIsNack,
+                                             bool bBroadcast, bool bPath,
+                                             const GUID * nakGuid,
+                                             unsigned nakReason,
+                                             unsigned nakData)
 :  Message(requestId, NV_DP_SBMSG_PRIORITY_LEVEL_DEFAULT)
 {
     BitStreamWriter writer(&encodedMessage.buffer, 0);
@@ -143,12 +175,21 @@ GenericUpReplyMessage::GenericUpReplyMessage(unsigned requestId, bool bReplyIsNa
     //
     writer.write(bReplyIsNack?1:0, 1);
     writer.write(requestId, 7);
+
+    if (bReplyIsNack)
+    {
+        writeNakBody(writer, nakGuid, nakReason, nakData);
+    }
 
     encodedMessage.isPathMessage = bPath;
     encodedMessage.isBroadcast  = bBroadcast;
 }
 
-GenericUpReplyMessage::GenericUpReplyMessage(const Address & target, unsigned requestId, bool bReplyIsNack, bool bBroadcast, bool bPath)
+GenericUpReplyMessage::GenericUpReplyMessage(const Address & target, unsigned requestId,
+                                             bool bReplyIsNack, bool bBroadcast, bool bPath,
+                                             const GUID * nakGuid,
+                                             unsigned nakReason,
+                                             unsigned nakData)
 :  Message(requestId, NV_DP_SBMSG_PRIORITY_LEVEL_DEFAULT)
 {
     BitStreamWriter writer(&encodedMessage.buffer, 0);
@@ -158,6 +199,11 @@ GenericUpReplyMessage::GenericUpReplyMessage(const Address & target, unsigned re
     //
     writer.write(bReplyIsNack?1:0, 1);
     writer.write(requestId, 7);
+
+    if (bReplyIsNack)
+    {
+        writeNakBody(writer, nakGuid, nakReason, nakData);
+    }
 
     encodedMessage.isPathMessage = bPath;
     encodedMessage.isBroadcast  = bBroadcast;
@@ -399,14 +445,22 @@ ParseResponseStatus RemoteDpcdReadMessage::parseResponseAck(EncodedMessage * mes
 {
     reader->readOrDefault(4 /*zeroes*/, 0);
     reply.portNumber = reader->readOrDefault(4 /*Port_Number*/, 0xF);
+
+    if (this->getSinkPort() != reply.portNumber)
+        return ParseResponseWrong;
+
     reply.numBytesReadDPCD = reader->readOrDefault(8 /*Num_Of_Bytes_Read*/, 0x0);
+
+    if (reply.numBytesReadDPCD > REMOTE_READ_BUFFER_SIZE)
+    {
+        reply.numBytesReadDPCD = 0;
+        return ParseResponseWrong;
+    }
+
     for (unsigned i=0; i<reply.numBytesReadDPCD; i++)
     {
         reply.readData[i] = (NvU8)reader->readOrDefault(8 /*data*/, 0x0);
     }
-
-    if (this->getSinkPort() != reply.portNumber)
-        return ParseResponseWrong;
 
     return ParseResponseSuccess;
 }
@@ -517,14 +571,22 @@ ParseResponseStatus RemoteI2cReadMessage::parseResponseAck(EncodedMessage * mess
 {
     reader->readOrDefault(4 /*zeroes*/, 0);
     reply.portNumber = reader->readOrDefault(4 /*Port_Number*/, 0xF);
+
+    if (this->getSinkPort() != reply.portNumber)
+        return ParseResponseWrong;
+
     reply.numBytesReadI2C = reader->readOrDefault(8 /*Num_Of_Bytes_Read*/, 0x0);
+
+    if (reply.numBytesReadI2C > REMOTE_READ_BUFFER_SIZE)
+    {
+        reply.numBytesReadI2C = 0;
+        return ParseResponseWrong;
+    }
+
     for (unsigned i=0; i<reply.numBytesReadI2C; i++)
     {
         reply.readData[i] = (NvU8)reader->readOrDefault(8 /*data*/, 0x0);
     }
-
-    if (this->getSinkPort() != reply.portNumber)
-        return ParseResponseWrong;
 
     return ParseResponseSuccess;
 }

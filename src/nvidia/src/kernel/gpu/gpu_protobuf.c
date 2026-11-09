@@ -22,6 +22,7 @@
  */
 
 #include "core/core.h"
+#include "core/system.h" // IsMobile
 #include "gpu/gpu.h"
 #include "platform/sli/sli.h"
 
@@ -87,6 +88,20 @@ _gpuDumpEngine_CommonFields
     prbEncAddBool(pPrbEnc,
                   NVDEBUG_ENG_GPU_IS_ACCESSIBLE,
                   pNvDumpState->bGpuAccessible);
+
+    if (pNvDumpState->bGpuAccessible)
+    {
+        NvBool bMarkedForReset = NV_FALSE;
+
+        rmStatus = gpuIsDeviceMarkedForReset(pGpu, &bMarkedForReset);
+        if (rmStatus == NV_OK)
+        {
+            prbEncAddBool(pPrbEnc,
+                          NVDEBUG_ENG_GPU_IS_MARKED_FOR_RESET,
+                          bMarkedForReset);
+        }
+        rmStatus = NV_OK;
+    }
 
     prbEncAddUInt32(pPrbEnc,
                     NVDEBUG_ENG_GPU_RUSD_MASK,

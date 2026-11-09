@@ -23,6 +23,7 @@
 
 #include "kernel/gpu/rc/kernel_rc.h"
 
+#include "containers/list.h"
 #include "kernel/core/locks.h"
 #include "kernel/core/system.h"
 #include "kernel/gpu/bif/kernel_bif.h"
@@ -52,9 +53,75 @@ krcConstructEngine_IMPL
 {
     _krcInitRegistryOverrides(pGpu, pKernelRc);
 
+    listInit(&pKernelRc->mmuExceptionCache, portMemAllocatorGetGlobalNonPaged());
+
     return NV_OK;
 }
 
+void
+krcStateDestroy_IMPL
+(
+    OBJGPU   *pGpu,
+    KernelRc *pKernelRc
+)
+{
+    listDestroy(&pKernelRc->mmuExceptionCache);
+}
+
+void
+krcChannelInfoFromChannelInfo_IMPL
+(
+    const FIFO_CHANNEL_INFO *pChannelInfo,
+    NvU32                  gfid,
+    RC_CHANNEL_INFO       *pRcChannelInfo
+)
+{
+    pRcChannelInfo->type = RC_CHANNEL_INFO_TYPE_CHANNEL_INFO;
+    pRcChannelInfo->gfid = gfid;
+    pRcChannelInfo->channelInfo = *pChannelInfo;
+}
+
+void
+krcChannelInfoFromInstblk_IMPL
+(
+    const INST_BLOCK_DESC *pInstblk,
+    RC_CHANNEL_INFO       *pRcChannelInfo
+)
+{
+    pRcChannelInfo->type = RC_CHANNEL_INFO_TYPE_INSTBLK;
+    pRcChannelInfo->gfid = pInstblk->gfid;
+    pRcChannelInfo->instblk.address = pInstblk->address;
+    pRcChannelInfo->instblk.aperture = pInstblk->aperture;
+}
+
+KernelChannel *
+krcGetKernelChannelFromInfo_IMPL
+(
+    OBJGPU                *pGpu,
+    const RC_CHANNEL_INFO *pRcChannelInfo
+)
+{
+    KernelFifo *pKernelFifo = GPU_GET_KERNEL_FIFO(pGpu);
+
+    if (pRcChannelInfo->type == RC_CHANNEL_INFO_TYPE_CHANNEL_INFO)
+    {
+        return kfifoKernelChannelFromInfo(pGpu, pKernelFifo, pRcChannelInfo->channelInfo);
+    }
+    else
+    {
+        KernelChannel *pKernelChannel = NULL;
+        INST_BLOCK_DESC instblk;
+
+        instblk.address  = pRcChannelInfo->instblk.address;
+        instblk.aperture = pRcChannelInfo->instblk.aperture;
+        instblk.gfid     = pRcChannelInfo->gfid;
+
+        if (kfifoConvertInstToKernelChannel_HAL(pGpu, pKernelFifo, &instblk, &pKernelChannel) == NV_OK)
+            return pKernelChannel;
+
+        return NULL;
+    }
+}
 
 void
 krcInitRegistryOverridesDelayed_IMPL
@@ -64,20 +131,20 @@ krcInitRegistryOverridesDelayed_IMPL
 )
 {
     KernelBif *pKernelBif = GPU_GET_KERNEL_BIF(pGpu);
+    KernelWatchdogState *pWatchdogState = NULL;
     NvU32 dword = 0;
     (void) dword;
 
+    if (GPU_GET_KERNEL_WATCHDOG(pGpu) != NULL)
+    {
+        pWatchdogState = &GPU_GET_KERNEL_WATCHDOG(pGpu)->watchdogState;
+    }
 
     dword = 0;
     if (osReadRegistryDword(pGpu, NV_REG_STR_RM_ROBUST_CHANNELS, &dword) !=
         NV_OK)
     {
-#if RMCFG_FEATURE_PLATFORM_WINDOWS || RMCFG_FEATURE_PLATFORM_GSP || \
-    RMCFG_FEATURE_PLATFORM_UNIX
         dword = NV_REG_STR_RM_ROBUST_CHANNELS_ENABLE;
-#else
-#error "unrecognized platform"
-#endif
     }
     pKernelRc->bRobustChannelsEnabled = (dword ==
                                          NV_REG_STR_RM_ROBUST_CHANNELS_ENABLE);
@@ -98,14 +165,15 @@ krcInitRegistryOverridesDelayed_IMPL
     // - When the system does not support CPU cache snooping (bugs 292461 and
     // 976485).
     //
-    if ((osReadRegistryDword(pGpu,
-                             NV_REG_STR_USE_UNCACHED_PCI_MAPPINGS,
-                             &dword) == NV_OK &&
-         dword != 0) ||
-        ((pKernelBif != NULL) &&
-         !kbifIsSnoopDmaCapable(pGpu, pKernelBif)))
+    if ((pWatchdogState != NULL) &&
+        ((osReadRegistryDword(pGpu,
+                              NV_REG_STR_USE_UNCACHED_PCI_MAPPINGS,
+                              &dword) == NV_OK &&
+          dword != 0) ||
+         ((pKernelBif != NULL) &&
+          !kbifIsSnoopDmaCapable(pGpu, pKernelBif))))
     {
-        pKernelRc->watchdog.flags |= WATCHDOG_FLAGS_ALLOC_UNCACHED_PCI;
+        pWatchdogState->flags |= WATCHDOG_FLAGS_ALLOC_UNCACHED_PCI;
     }
 }
 
@@ -144,73 +212,6 @@ _krcInitRegistryOverrides
     }
     NV_PRINTF(LEVEL_INFO, "BreakOnRc = %d\n", pKernelRc->bBreakOnRc);
 
-    if (osReadRegistryDword(pGpu,
-                            NV_REG_STR_RM_WATCHDOG_TIMEOUT,
-                            &pKernelRc->watchdogPersistent.timeoutSecs) !=
-            NV_OK ||
-        pKernelRc->watchdogPersistent.timeoutSecs == 0)
-    {
-        pKernelRc->watchdogPersistent.timeoutSecs =
-            NV_REG_STR_RM_WATCHDOG_TIMEOUT_DEFAULT;
-    }
-
-    NvU32 data32 = 0;
-    NvU32 bug5203024OverrideTimeouts = (
-        (osReadRegistryDword(pGpu, NV_REG_STR_RM_BUG5203024_OVERRIDE_TIMEOUT,
-                             &data32) == NV_OK) ?
-        data32 :
-        0);
-
-    NvBool bOverrideWatchdogTimeout = (DRF_VAL(_REG_STR,
-                                               _RM_BUG5203024_OVERRIDE_TIMEOUT,
-                                               _FLAGS_SET_RC_WATCHDOG_TIMEOUT,
-                                               bug5203024OverrideTimeouts) ==
-                                       1);
-    if (bOverrideWatchdogTimeout)
-    {
-        pKernelRc->watchdogPersistent.timeoutSecs =
-            DRF_VAL(_REG_STR, _RM_BUG5203024_OVERRIDE_TIMEOUT, _VALUE_MS,
-                    bug5203024OverrideTimeouts) / 1000;
-
-        NV_PRINTF(LEVEL_NOTICE, "RC Watchdog timeout forced to %d seconds.\n",
-                  pKernelRc->watchdogPersistent.timeoutSecs);
-    }
-
-    if (osReadRegistryDword(pGpu,
-                            NV_REG_STR_RM_WATCHDOG_INTERVAL,
-                            &pKernelRc->watchdogPersistent.intervalSecs) !=
-            NV_OK ||
-        pKernelRc->watchdogPersistent.intervalSecs == 0)
-    {
-        pKernelRc->watchdogPersistent.intervalSecs =
-            NV_REG_STR_RM_WATCHDOG_INTERVAL_DEFAULT;
-    }
-
-    if (pKernelRc->watchdogPersistent.intervalSecs >
-        pKernelRc->watchdogPersistent.timeoutSecs)
-    {
-        pKernelRc->watchdogPersistent.intervalSecs =
-            pKernelRc->watchdogPersistent.timeoutSecs;
-    }
-
-
-    dword = 0;
-    if (osReadRegistryDword(pGpu, NV_REG_STR_RM_RC_WATCHDOG, &dword) == NV_OK)
-    {
-        if (dword == NV_REG_STR_RM_RC_WATCHDOG_DISABLE)
-        {
-            pKernelRc->watchdog.flags |= WATCHDOG_FLAGS_DISABLED;
-        }
-    }
-    else if (IS_EMULATION(pGpu) || IS_SIMULATION(pGpu))
-    {
-        pKernelRc->watchdog.flags |= WATCHDOG_FLAGS_DISABLED;
-    }
-    else if (gpuIsCCFeatureEnabled(pGpu))
-    {
-        pKernelRc->watchdog.flags |= WATCHDOG_FLAGS_DISABLED;
-    }
-
     dword = 0;
     if (osReadRegistryDword(pGpu, NV_REG_STR_RM_DO_LOG_RC_EVENTS, &dword) ==
         NV_OK)
@@ -219,10 +220,6 @@ _krcInitRegistryOverrides
         if (pKernelRc->bLogEvents)
         {
             NV_PRINTF(LEVEL_INFO, "RC Error Logging is enabled\n");
-#if defined(DEBUG)
-            // Don't print out the initialization log on a retail build
-            osErrorLog(pGpu, ROBUST_CHANNEL_RC_LOGGING_ENABLED, "");
-#endif
         }
     }
 
@@ -314,7 +311,6 @@ krcReportXid_IMPL
         NvU16          gpuPartitionId;
         NvU16          computeInstanceId;
         KernelChannel *pKernelChannel = krcGetChannelInError(pKernelRc);
-        char          *allocProcName = NULL;
         const char    *procName = NULL;
         char           pidStr[12] = "";
 
@@ -327,9 +323,7 @@ krcReportXid_IMPL
         //
         // When the channel context is available, use the allocating process'
         // PID/name, which were populated when the channel was allocated.
-        // For errors without a channel context, use the current process
-        // information, if there's a Resource Server CALL_CONTEXT present
-        // in TLS, indicating we're servicing an RMAPI request.
+        // Omit PID/name for Xid not attributable to channel context.
         //
         if (pKernelChannel != NULL)
         {
@@ -345,19 +339,6 @@ krcReportXid_IMPL
             RmClient *pRmClient = dynamicCast(pClient, RmClient);
             procName = pRmClient->name;
             nvDbgSnprintf(pidStr, sizeof(pidStr), "%u", pKernelChannel->ProcessID);
-        }
-        else if (resservGetTlsCallContext() != NULL)
-        {
-            NvU32 currentPid = osGetCurrentProcess();
-
-            nvDbgSnprintf(pidStr, sizeof(pidStr), "%u", currentPid);
-
-            allocProcName = portMemAllocNonPaged(NV_PROC_NAME_MAX_LENGTH);
-            if (allocProcName != NULL)
-            {
-                osGetCurrentProcessName(allocProcName, NV_PROC_NAME_MAX_LENGTH);
-                procName = allocProcName;
-            }
         }
 
         _krcLogUuidOnce(pGpu, pKernelRc);
@@ -418,39 +399,8 @@ krcReportXid_IMPL
         }
 
         #undef XID_PRINT_WITH_ATTR
-
-        portMemFree(allocProcName);
     }
 }
-
-
-NvBool
-krcTestAllowAlloc_IMPL
-(
-    OBJGPU   *pGpu,
-    KernelRc *pKernelRc,
-    NvU32     failMask
-)
-{
-    if (pKernelRc->bRobustChannelsEnabled &&
-        (pKernelRc->watchdog.allocFailMask & failMask))
-    {
-        OBJTMR   *pTmr = GPU_GET_TIMER(pGpu);
-        NvU64     time;
-        NV_STATUS status = tmrGetCurrentTime(pTmr, &time);
-
-        //
-        // randomly fail this alloc based on NV timer
-        // assuming here that we don't get allocations within 128ns of each
-        // other
-        //
-        if (status == NV_OK && ((time & 0xff) > (0xffu / 2)))
-            return NV_FALSE;
-    }
-
-    return NV_TRUE;
-}
-
 
 NV_STATUS
 krcCheckBusError_KERNEL
@@ -603,13 +553,12 @@ krcGetChannelInError_FWCLIENT
 static void
 _krcValidateAndDumpToKernelLog(NvU64 *lastXidTimestamp)
 {
-    NvU32 sec, usec;
+    NvU64 nowNs = osGetMonotonicTimeNs();
 
-    if (((osGetSystemTime(&sec, &usec) == NV_OK) &&
-       ((((sec * 1000000) + usec) - *lastXidTimestamp) > 1000000)))
+    if ((nowNs - *lastXidTimestamp) > NSEC_PER_SEC)
     {
         nvlogDumpToKernelLog(NV_TRUE);
-        *lastXidTimestamp = ((NvU64)sec * 1000000) + usec;
+        *lastXidTimestamp = nowNs;
     }
 }
 #endif //!(DEBUG || DEVELOP)
@@ -754,13 +703,85 @@ krcRcAndNotifyAllChannels_IMPL
                                 RC_NOTIFIER_SCOPE_CHANNEL));
 
         NV_ASSERT_OK(
-            krcErrorSendEventNotifications_HAL(pGpu, pKernelRc,
-                                               pKernelChannel,
-                                               kchannelGetEngineType(pKernelChannel),
-                                               0,
-                                               exceptType,
-                                               RC_NOTIFIER_SCOPE_CHANNEL,
-                                               0,
-                                               NV_FALSE));
+            krcErrorNotifyClients_HAL(pGpu, pKernelRc,
+                                                      pKernelChannel,
+                                                      exceptType,
+                                                      RC_NOTIFIER_SCOPE_CHANNEL,
+                                                      0));
+    }
+}
+
+static NvU32
+krcNormalizeInstblkAperture(NvU32 aperture)
+{
+    if (aperture == INST_BLOCK_APERTURE_SYSTEM_COHERENT_MEMORY)
+        return INST_BLOCK_APERTURE_SYSTEM_NON_COHERENT_MEMORY;
+    return aperture;
+}
+
+MMU_EXCEPTION_CACHE_ENTRY *
+krcMmuExceptionCacheFindInstblk_IMPL
+(
+    KernelRc              *pKernelRc,
+    const INST_BLOCK_DESC *pInstblk
+)
+{
+    MMU_EXCEPTION_CACHE_ENTRY *pEntry;
+    NvU32 aperture = krcNormalizeInstblkAperture(pInstblk->aperture);
+
+    for (pEntry = listHead(&pKernelRc->mmuExceptionCache);
+         pEntry != NULL;
+         pEntry = listNext(&pKernelRc->mmuExceptionCache, pEntry))
+    {
+        if ((pEntry->inst.address  == pInstblk->address) &&
+            (krcNormalizeInstblkAperture(pEntry->inst.aperture) == aperture) &&
+            (pEntry->inst.gfid     == pInstblk->gfid))
+        {
+            return pEntry;
+        }
+    }
+    return NULL;
+}
+
+FIFO_MMU_EXCEPTION_DATA *
+krcMmuExceptionCacheInsert_IMPL
+(
+    KernelRc                      *pKernelRc,
+    const INST_BLOCK_DESC         *pInstblk,
+    const FIFO_MMU_EXCEPTION_DATA *pData
+)
+{
+    MMU_EXCEPTION_CACHE_ENTRY *pEntry;
+
+    pEntry = krcMmuExceptionCacheFindInstblk(pKernelRc, pInstblk);
+    if (pEntry != NULL)
+    {
+        portMemCopy(&pEntry->data, sizeof(pEntry->data), pData, sizeof(*pData));
+        return &pEntry->data;
+    }
+
+    pEntry = listAppendNew(&pKernelRc->mmuExceptionCache);
+    if (pEntry == NULL)
+        return NULL;
+
+    portMemCopy(&pEntry->inst, sizeof(pEntry->inst), pInstblk, sizeof(*pInstblk));
+    portMemCopy(&pEntry->data, sizeof(pEntry->data), pData, sizeof(*pData));
+
+    return &pEntry->data;
+}
+
+void
+krcMmuExceptionCacheDelete_IMPL
+(
+    KernelRc              *pKernelRc,
+    const INST_BLOCK_DESC *pInstblk
+)
+{
+    MMU_EXCEPTION_CACHE_ENTRY *pEntry;
+
+    pEntry = krcMmuExceptionCacheFindInstblk(pKernelRc, pInstblk);
+    if (pEntry != NULL)
+    {
+        listRemove(&pKernelRc->mmuExceptionCache, pEntry);
     }
 }

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2008-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2008-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -44,6 +44,8 @@
 #include "kernel/gpu/fifo/kernel_fifo.h"
 
 typedef struct ContextDma ContextDma;
+
+#define NV_VGPU_GUEST_CLK_DOMAIN_ENUM_STYLE_ENABLE 0
 
 #define NV_RM_RPC_ALLOC_SHARE_DEVICE_FWCLIENT(pGpu, hclient, hdevice, hclientshare, htargetclient, htargetdevice, hclass, \
                                         allocflags, vasize, vamode, bFirstDevice, status)          \
@@ -117,10 +119,7 @@ typedef struct ContextDma ContextDma;
         OBJRPC *pRpc;                                                                   \
         pRpc = GPU_GET_RPC(pGpu);                                                       \
         NV_ASSERT(pRpc != NULL);                                                        \
-        if ((status == NV_OK) && (pRpc != NULL)                                         \
-            && (!(IS_VIRTUAL_WITH_SRIOV(pGpu) &&                                        \
-                  !gpuIsWarBug200577889SriovHeavyEnabled(pGpu) &&                       \
-                  !NV_IS_MODS))) {                                                      \
+        if ((status == NV_OK) && (pRpc != NULL)) {                                      \
           if (IS_DCE_CLIENT(pGpu))                                                      \
           {                                                                             \
             RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);                              \
@@ -496,14 +495,14 @@ static inline void NV_RM_RPC_PMA_SCRUBBER_SHARED_BUFFER_GUEST_PAGES_OPERATION(OB
 // DCE_CLIENT_RM specific RPCs
 //
 
-#define NV_RM_RPC_DCE_RM_INIT(pGpu, bInit, status)                              \
+#define NV_RM_RPC_DCE_RM_INIT(pGpu, bInit, bFromResume, status)                              \
     do                                                                          \
     {                                                                           \
         OBJRPC* pRpc = GPU_GET_RPC(pGpu);                                       \
         if ((status == NV_OK) && (pRpc != NULL))                                \
         {                                                                       \
             RM_API *pRmApi = GPU_GET_PHYSICAL_RMAPI(pGpu);                      \
-            status = rpcDceRmInit_dce(pRmApi, bInit);                           \
+            status = rpcDceRmInit_dce(pRmApi, bInit, bFromResume);                           \
         } else if (pRpc == NULL)                                                \
             status = NV_ERR_INSUFFICIENT_RESOURCES;                             \
     } while (0)
@@ -519,28 +518,6 @@ static inline void NV_RM_RPC_PMA_SCRUBBER_SHARED_BUFFER_GUEST_PAGES_OPERATION(OB
         NV_ASSERT(pRpc != NULL);                                               \
         if ((status == NV_OK) && (pRpc != NULL))                               \
             status = rpcGetGspStaticInfo_HAL(pGpu, pRpc);                      \
-        else if (pRpc == NULL)                                                 \
-            status = NV_ERR_INSUFFICIENT_RESOURCES;                            \
-    } while (0)
-
-#define NV_RM_RPC_GSP_SET_SYSTEM_INFO(pGpu, status)                            \
-    do                                                                         \
-    {                                                                          \
-        OBJRPC *pRpc = GPU_GET_RPC(pGpu);                                      \
-        NV_ASSERT(pRpc != NULL);                                               \
-        if ((status == NV_OK) && (pRpc != NULL))                               \
-            status = rpcGspSetSystemInfo_HAL(pGpu, pRpc);                      \
-        else if (pRpc == NULL)                                                 \
-            status = NV_ERR_INSUFFICIENT_RESOURCES;                            \
-    } while (0)
-
-#define NV_RM_RPC_SET_REGISTRY(pGpu, status)                                   \
-    do                                                                         \
-    {                                                                          \
-        OBJRPC *pRpc = GPU_GET_RPC(pGpu);                                      \
-        NV_ASSERT(pRpc != NULL);                                               \
-        if ((status == NV_OK) && (pRpc != NULL))                               \
-            status = rpcSetRegistry_HAL(pGpu, pRpc);                           \
         else if (pRpc == NULL)                                                 \
             status = NV_ERR_INSUFFICIENT_RESOURCES;                            \
     } while (0)
@@ -569,13 +546,13 @@ static inline void NV_RM_RPC_PMA_SCRUBBER_SHARED_BUFFER_GUEST_PAGES_OPERATION(OB
             status = NV_ERR_INSUFFICIENT_RESOURCES;                            \
     } while (0)
 
-#define NV_RM_RPC_INIT_GSP_TRACE_CRASH_BUFFER(pGpu, status, pa, size)          \
+#define NV_RM_RPC_INIT_GSP_TRACE_CRASH_BUFFER(pGpu, status, pa, size, libosPa, libosSize) \
     do                                                                         \
     {                                                                          \
         OBJRPC *pRpc = GPU_GET_RPC(pGpu);                                      \
         NV_ASSERT(pRpc != NULL);                                               \
         if ((status == NV_OK) && (pRpc != NULL))                               \
-            status = rpcInitGspTraceCrashBuffer_HAL(pGpu, pRpc, pa, size);     \
+            status = rpcInitGspTraceCrashBuffer_HAL(pGpu, pRpc, pa, size, libosPa, libosSize); \
         else if (pRpc == NULL)                                                 \
             status = NV_ERR_INSUFFICIENT_RESOURCES;                            \
     } while (0)

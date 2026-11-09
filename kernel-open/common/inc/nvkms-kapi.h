@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2015-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2015-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -174,7 +174,18 @@ struct NvKmsKapiDeviceResourcesInfo {
 
         NvBool  supportsSyncpts;
 
+        NvBool supportsColorPassthrough;
+
         NvBool contiguousPhysicalMappings;
+
+        /*
+         * Whether this device is an SoC product whose display is driven by
+         * the dGPU-style display class and needs the resume connector
+         * re-probe workaround (bug 6422321).  Do not use this for anything
+         * else: it exists only for that workaround and is tracked for
+         * removal by bug 6556017.
+         */
+        NvBool isSocDgpuDisplayNeedingWar;
     } caps;
 
     NvU64 supportedSurfaceMemoryFormats[NVKMS_KAPI_LAYER_MAX];
@@ -298,6 +309,7 @@ struct NvKmsKapiLayerConfig {
         NvU64 offset;
         NvU32 vssSegments;
         NvU32 lutEntries;
+        NvBool satCorrEnable;
     } tmo;
 
     struct NvKmsCscMatrix csc;
@@ -317,25 +329,28 @@ struct NvKmsKapiLayerConfig {
             NvBool blendCtm    : 1;
         } enabled;
     } matrixOverrides;
+
+    NvBool precompColorPassthrough;
 };
 
 struct NvKmsKapiLayerRequestedConfig {
     struct NvKmsKapiLayerConfig config;
     struct {
-        NvBool surfaceChanged          : 1;
-        NvBool srcXYChanged            : 1;
-        NvBool srcWHChanged            : 1;
-        NvBool dstXYChanged            : 1;
-        NvBool dstWHChanged            : 1;
-        NvBool cscChanged              : 1;
-        NvBool inputTfChanged          : 1;
-        NvBool outputTfChanged         : 1;
-        NvBool inputColorSpaceChanged  : 1;
-        NvBool inputColorRangeChanged  : 1;
-        NvBool hdrMetadataChanged      : 1;
-        NvBool matrixOverridesChanged  : 1;
-        NvBool ilutChanged             : 1;
-        NvBool tmoChanged              : 1;
+        NvBool surfaceChanged                 : 1;
+        NvBool srcXYChanged                   : 1;
+        NvBool srcWHChanged                   : 1;
+        NvBool dstXYChanged                   : 1;
+        NvBool dstWHChanged                   : 1;
+        NvBool cscChanged                     : 1;
+        NvBool inputTfChanged                 : 1;
+        NvBool outputTfChanged                : 1;
+        NvBool inputColorSpaceChanged         : 1;
+        NvBool inputColorRangeChanged         : 1;
+        NvBool hdrMetadataChanged             : 1;
+        NvBool matrixOverridesChanged         : 1;
+        NvBool ilutChanged                    : 1;
+        NvBool tmoChanged                     : 1;
+        NvBool precompColorPassthroughChanged : 1;
     } flags;
 };
 
@@ -386,21 +401,11 @@ struct NvKmsKapiHeadModeSetConfig {
         struct NvKmsHDRStaticMetadata staticMetadata;
     } hdrInfoFrame;
 
+    struct NvKmsHdmiVsifMetadata hdmiVsifMetadata;
+
+    enum NvKmsAllmMode allmMode;
+
     enum NvKmsOutputColorimetry colorimetry;
-
-    struct {
-        struct {
-            NvU32 depth;
-            NvU32 start;
-            NvU32 end;
-            struct NvKmsLutRamps *pRamps;
-        } input;
-
-        struct {
-            NvBool enabled;
-            struct NvKmsLutRamps *pRamps;
-        } output;
-    } lut;
 
     struct {
         NvBool enabled;
@@ -416,21 +421,43 @@ struct NvKmsKapiHeadModeSetConfig {
         enum NvKmsDpyAttributeRequestedDitheringValue state;
         enum NvKmsDpyAttributeRequestedDitheringModeValue mode;
     } dithering;
+
+    NvBool postcompColorPassthrough;
+
+    /*!
+     * Output color format selection. Maps to
+     * NvKmsDpyAttributeRequestedColorFormatValue.
+     * NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_UNKNOWN means "no
+     * preference" -- NVKMS chooses based on its own heuristics.
+     */
+    NvU32 colorFormat;
+
+    /*!
+     * Output color bit depth selection. Maps to
+     * NvKmsDpyAttributeColorBpcValue.
+     * NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN means "no
+     * preference" -- NVKMS chooses based on its own heuristics.
+     */
+    NvU32 colorBpc;
 };
 
 struct NvKmsKapiHeadRequestedConfig {
     struct NvKmsKapiHeadModeSetConfig modeSetConfig;
     struct {
-        NvBool activeChanged          : 1;
-        NvBool displaysChanged        : 1;
-        NvBool modeChanged            : 1;
-        NvBool hdrInfoFrameChanged    : 1;
-        NvBool colorimetryChanged     : 1;
-        NvBool legacyIlutChanged      : 1;
-        NvBool legacyOlutChanged      : 1;
-        NvBool olutChanged            : 1;
-        NvBool olutFpNormScaleChanged : 1;
-        NvBool ditheringChanged       : 1;
+        NvBool activeChanged                   : 1;
+        NvBool displaysChanged                 : 1;
+        NvBool modeChanged                     : 1;
+        NvBool hdrInfoFrameChanged             : 1;
+        NvBool colorimetryChanged              : 1;
+        NvBool olutChanged                     : 1;
+        NvBool olutFpNormScaleChanged          : 1;
+        NvBool ditheringChanged                : 1;
+        NvBool hdmiVsifMetadataChanged         : 1;
+        NvBool allmModeChanged                 : 1;
+        NvBool postcompColorPassthroughChanged : 1;
+        NvBool colorFormatChanged              : 1;
+        NvBool colorBpcChanged                 : 1;
+        NvBool vrrEnabledChanged               : 1;
     } flags;
 
     struct NvKmsKapiCursorRequestedConfig cursorRequestedConfig;
@@ -465,6 +492,16 @@ struct NvKmsKapiEventDisplayChanged {
     NvKmsKapiDisplay display;
 };
 
+struct NvKmsKapiEventDisplayCpChanged {
+    NvKmsKapiDisplay display;
+    enum NvKmsContentProtection cp;
+};
+
+struct NvKmsKapiEventDisplayCpTopologyChanged {
+    NvKmsKapiDisplay display;
+    const void *topology;
+};
+
 struct NvKmsKapiEventDynamicDisplayConnected {
     NvKmsKapiDisplay display;
 };
@@ -496,6 +533,8 @@ struct NvKmsKapiEvent {
         struct NvKmsKapiEventDisplayChanged displayChanged;
         struct NvKmsKapiEventDynamicDisplayConnected dynamicDisplayConnected;
         struct NvKmsKapiEventFlipOccurred flipOccurred;
+        struct NvKmsKapiEventDisplayCpChanged displayCpChanged;
+        struct NvKmsKapiEventDisplayCpTopologyChanged displayCpTopologyChanged;
     } u;
 };
 
@@ -520,6 +559,9 @@ struct NvKmsKapiDynamicDisplayParams {
 
     /* [OUT] VRR status */
     NvBool vrrSupported;
+
+    /* [OUT] ALLM capability (display advertises ALLM support in EDID) */
+    NvBool allmCapable;
 
     /* [IN/OUT] EDID of connected monitor/ Input to override EDID */
     struct {
@@ -1604,26 +1646,6 @@ struct NvKmsKapiFunctionsTable {
     (
         struct NvKmsKapiDevice *device,
         NvU32 semaphoreIndex
-    );
-
-    /*!
-     * Check or wait on a head's LUT notifier.
-     *
-     * \param [in]  device              A device allocated using allocateDevice().
-     *
-     * \param [in]  head                The head to check for LUT completion.
-     *
-     * \param [in]  waitForCompletion   If true, wait for the notifier in NvKms
-     *                                  before returning.
-     *
-     * \param [out] complete            Returns whether the notifier has completed.
-     */
-    NvBool
-    (*checkLutNotifier)
-    (
-        struct NvKmsKapiDevice *device,
-        NvU32 head,
-        NvBool waitForCompletion
     );
 
     /*

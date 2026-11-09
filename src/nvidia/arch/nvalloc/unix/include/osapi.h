@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1999-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1999-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -141,7 +141,6 @@ NV_STATUS  rm_get_adapter_status    (nv_state_t *, NvU32 *);
 
 void       rm_client_free_os_events (NvHandle);
 
-NV_STATUS  rm_create_mmap_context   (NvHandle, NvHandle, NvHandle, NvP64, NvU64, NvU64, NvU32, NvU32);
 NV_STATUS  rm_update_device_mapping_info  (NvHandle, NvHandle, NvHandle, void *, void *);
 
 NV_STATUS  rm_access_registry       (NvHandle, NvHandle, NvU32, NvP64, NvU32, NvP64, NvU32, NvP64, NvU32 *, NvU32 *, NvU32 *);
@@ -197,7 +196,7 @@ void       RmUnixRmApiEpilogue      (nv_state_t *, THREAD_STATE_NODE *);
 
 static inline NvBool rm_is_system_notebook(void)
 {
-    return (nv_is_chassis_notebook() || nv_acpi_is_battery_present());
+    return sysGetStaticConfig(SYS_GET_INSTANCE())->bIsNotebook;
 }
 
 #endif // _OSAPI_H_

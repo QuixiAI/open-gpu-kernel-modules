@@ -320,6 +320,12 @@ namespace DisplayPort
         virtual bool getSDPExtnForColorimetry() = 0;
         virtual bool getRootAsyncSDPSupported() = 0;
 
+        //
+        // DPCD offset 00008h[0] (or 02208h[0] when the Extended Receiver Capability
+        // field is present) - LOCAL_NATIVE_DISPLAYID_PRESENT.
+        //
+        virtual bool getLocalNativeDisplayIdPresent() = 0;
+
         bool isAtLeastVersion(unsigned major, unsigned minor)
         {
             if (getRevisionMajor() > major)
@@ -409,6 +415,7 @@ namespace DisplayPort
 
         virtual void setDPCDOffline(bool enable) = 0;
         virtual void updateDPCDOffline() = 0;
+        virtual void updateDPCDOfflineRetryOnNack() = 0;
         virtual bool auxAccessAvailable() = 0;
 
         virtual void setSupportsESI(bool bIsESISupported) = 0;
@@ -572,6 +579,10 @@ namespace DisplayPort
         virtual bool     clearDpTunnelingEstimatedBwStatus() = 0;
         virtual bool     clearDpTunnelingBwAllocationCapStatus() = 0;
         virtual void     setIgnoreDiaLttprInterlaneAlignStatus() = 0;
+        virtual void     setIgnoreDiaNonLttprCrDoneStatus() = 0;
+        virtual void     setOverrideExtendedWakeCapsForDpTunneling() = 0;
+        virtual void     setChunkedLttprCapsReadForDpTunneling() = 0;
+        virtual void     setOverrideDpcdRevFromDia() = 0;
 
         virtual AuxRetry::status notifySDPErrDetectionCapability() = 0;
         virtual bool isDp2xChannelCodingCapable() = 0;
@@ -583,6 +594,8 @@ namespace DisplayPort
         virtual void setUSBCCableIDInfo(NV0073_CTRL_DP_USBC_CABLEID_INFO *cableIDInfo) = 0;
         virtual void setCableVconnSourceUnknown() = 0;
         virtual bool isCableIdHandshakeCompleted() = 0;
+
+        virtual AuxRetry::status readLegacyIrqBlock() = 0;
         virtual ~DPCDHAL() {}
     };
 
@@ -667,6 +680,13 @@ namespace DisplayPort
 
             bool      extendedRxCapsPresent;                        // DPCD offset 000Eh [7] - Extended Receiver Capability present
 
+            //
+            // DPCD offset 00008h [0] (02208h [0] when extendedRxCapsPresent) -
+            // LOCAL_NATIVE_DISPLAYID_PRESENT. Sink advertises a Native DisplayID
+            // structure at DDC addresses A4h/A5h.
+            //
+            bool      bLocalNativeDisplayIdPresent;
+
             // DPCD Offset 2211h;
             unsigned  extendedSleepWakeTimeoutRequestMs;
             // DPCD Offset 0119h [0] - If we grant the extendedSleepWakeTimeoutRequest
@@ -712,6 +732,10 @@ namespace DisplayPort
         bool bEnableDpTunnelBwAllocationSupport;
         bool bIsDpTunnelBwAllocationEnabled;                        // This is set to true after we succeed in enabling BW allocation
         bool bIsIgnoreDiaLttprInterlaneAlignStatus;
+        bool bIsIgnoreDiaNonLttprCrDoneStatus;
+        bool bOverrideExtendedWakeCapsForDpTunneling;
+        bool bChunkedLttprCapsReadForDpTunneling;
+        bool bOverrideDpcdRevFromDia;
 
         struct
         {
@@ -798,7 +822,12 @@ namespace DisplayPort
         : bus(bus), timer(timer), bGrantsPostLtRequest(false), uprequestEnable(false),
           upstreamIsSource(false), bMultistream(false), bGpuFECSupported(false),
           bBypassILREdpRevCheck(false), overrideDpcdMaxLinkRate(0),
-          overrideDpcdRev(0), gpuDPSupportedVersions(0)
+          overrideDpcdRev(0), gpuDPSupportedVersions(0),
+          bIsIgnoreDiaLttprInterlaneAlignStatus(false),
+          bIsIgnoreDiaNonLttprCrDoneStatus(false),
+          bOverrideExtendedWakeCapsForDpTunneling(false),
+          bChunkedLttprCapsReadForDpTunneling(false),
+          bOverrideDpcdRevFromDia(false)
         {
             // start with default caps.
             dpcdOffline = true;
@@ -840,6 +869,7 @@ namespace DisplayPort
         }
 
         void updateDPCDOffline();
+        void updateDPCDOfflineRetryOnNack();
         bool auxAccessAvailable();
 
         void setPC2Disabled(bool disabled)
@@ -908,6 +938,12 @@ namespace DisplayPort
         virtual bool getNoLinkTraining()
         {
             return caps.noLinkTraining;
+        }
+
+        // DPCD offset 00008h [0] / 02208h [0]
+        virtual bool getLocalNativeDisplayIdPresent()
+        {
+            return caps.bLocalNativeDisplayIdPresent;
         }
 
         virtual unsigned getPhyRepeaterCount()
@@ -1526,6 +1562,26 @@ namespace DisplayPort
             bIsIgnoreDiaLttprInterlaneAlignStatus = true;
         }
 
+        virtual void setIgnoreDiaNonLttprCrDoneStatus()
+        {
+            bIsIgnoreDiaNonLttprCrDoneStatus = true;
+        }
+
+        virtual void setOverrideExtendedWakeCapsForDpTunneling()
+        {
+            bOverrideExtendedWakeCapsForDpTunneling = true;
+        }
+
+        virtual void setChunkedLttprCapsReadForDpTunneling()
+        {
+            bChunkedLttprCapsReadForDpTunneling = true;
+        }
+
+        virtual void setOverrideDpcdRevFromDia()
+        {
+            bOverrideDpcdRevFromDia = true;
+        }
+
         bool getDpTunnelEstimatedBw(NvU8 &estimatedBw);
         bool hasDpTunnelEstimatedBwChanged();
         bool hasDpTunnelBwAllocationCapabilityChanged();
@@ -1547,6 +1603,9 @@ namespace DisplayPort
         virtual void setConnectorTypeC(bool bTypeC) { return; }
         virtual void setUSBCCableIDInfo(NV0073_CTRL_DP_USBC_CABLEID_INFO *cableIDInfo) {}
         virtual bool isCableIdHandshakeCompleted() { return false; }
+
+        virtual AuxRetry::status readLegacyIrqBlock();
+
     };
 
 }

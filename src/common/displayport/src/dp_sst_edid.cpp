@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2010-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2010-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -136,8 +136,8 @@ static bool readNextBlock(AuxBus * auxBus, NvU8 seg, NvU8 offset, Buffer & buffe
             if (retries >= EDID_MAX_AUX_RETRIES)
                 return false;
 
-            DP_PRINTF(DP_WARNING, "DisplayPort: %s: Retrying at totalRead 0x%08x (replyType %x, size %x)",
-                  __FUNCTION__, totalRead, auxStatus, sizeRequested);
+            DP_PRINTF(DP_WARNING, "DisplayPort: Retrying at totalRead 0x%08x (replyType %x, size %x)",
+                  totalRead, auxStatus, sizeRequested);
 
             // Wait for sometime between retries
             timer->sleep(EDID_AUX_WAIT_TIME);
@@ -150,8 +150,8 @@ static bool readNextBlock(AuxBus * auxBus, NvU8 seg, NvU8 offset, Buffer & buffe
         if ((sizeRequested != sizeCompleted) &&
             (totalRead + transactionSize < EDID_BLOCK_SIZE))
         {
-            DP_PRINTF(DP_ERROR, "DisplayPort: %s: dpAux returned edid block smaller than expected. Read from totalRead 0x%08x (replyType %x, size %x)",
-                  __FUNCTION__, totalRead, auxStatus, sizeRequested);
+            DP_PRINTF(DP_ERROR, "DisplayPort: dpAux returned edid block smaller than expected. Read from totalRead 0x%08x (replyType %x, size %x)",
+                  totalRead, auxStatus, sizeRequested);
             DP_ASSERT(0);
         }
 
@@ -191,6 +191,7 @@ static bool sstReadEdid(AuxBus * auxBus, Edid & edid, unsigned DDCAddr, Timer * 
         NvU8 offset = 0;
         unsigned totalRead = 0;
         edidReaderManager.reset();
+        edid.setPatchedChecksum(false);
 
         // start by reading first EDID block, posting it and analyzing for next request
         do
@@ -310,6 +311,16 @@ bool DisplayPort::EdidReadSST(Edid & edid, AuxBus * auxBus, Timer* timer,
 
             if (status)
             {
+                if (!bBypassAssembler && !edid.isValidHeader())
+                {
+                    edid.resetData();
+                    previousEdid.resetData();
+                    firstTrial = true;
+                    elapsedTime = timer->getTimeUs() - startTime;
+                    timer->sleep(1);
+                    continue;
+                }
+
                 if (edid.verifyCRC())
                 {
                     return true;

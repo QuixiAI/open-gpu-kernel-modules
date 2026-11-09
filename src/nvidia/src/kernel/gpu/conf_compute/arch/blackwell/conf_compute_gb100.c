@@ -244,3 +244,33 @@ NV_STATUS confComputeUpdatePerChannelSecrets_GB100(ConfidentialCompute *pConfCom
 
     return NV_OK;
 }
+
+/*!
+ * @brief Blackwell implementation for checking CC support on self-hosted platforms
+ */
+NV_STATUS
+confComputeTestPlatformSupport_GB100
+(
+    OBJGPU              *pGpu,
+    ConfidentialCompute *pConfCompute
+)
+{
+    if (gpuIsSelfHosted(pGpu))
+    {
+        if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_CC_FEATURE_ENABLED))
+        {
+            NV_PRINTF(LEVEL_ERROR, "CC is not supported on self-hosted platforms\n");
+            return NV_ERR_NOT_SUPPORTED;
+        }
+    }
+    else
+    {
+        if (pConfCompute->getProperty(pConfCompute, PDB_PROP_CONFCOMPUTE_BM_SECURE_AI_ENABLED))
+        {
+            NV_PRINTF(LEVEL_ERROR, "Baremetal Secure AI is only supported on self-hosted platforms\n");
+            return NV_ERR_NOT_SUPPORTED;
+        }
+    }
+
+    return NV_OK;
+}

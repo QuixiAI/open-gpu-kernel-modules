@@ -185,6 +185,51 @@ CliNotifyVgpuConfigEvent
     }
 }
 
+// This function checks the super profile config based on the regkey value.
+// In case of invalid combination, it returns NV_ERR_NOT_COMPATIBLE.
+// Otherwise, it returns NV_OK.
+
+static NV_STATUS
+vgpuCheckSuperProfileConfig
+(
+    OBJGPU *pGpu,
+    NVA081_CTRL_VGPU_INFO *pVgpuInfo
+)
+{
+    NvU32 singleVmModeData = 0;
+    NvBool bIsSuperProfile = (pVgpuInfo->isSuperProfile == 1);
+
+    // Super profile filtering is only meaningful on GSP-based (ADA+) GPUs.
+    // On pre-Ada GPUs, skip the regkey read entirely.
+    if (!IsADAorBetter(pGpu))
+        return NV_OK;
+
+    if (NV_OK == osReadRegistryDword(pGpu,
+                                     NV_REG_STR_RM_VGPU_GSP_SINGLE_VM_MODE,
+                                     &singleVmModeData))
+    {
+        if ((singleVmModeData == NV_REG_STR_RM_VGPU_GSP_SINGLE_VM_MODE_ENABLED) &&
+            (!bIsSuperProfile))
+        {
+            return NV_ERR_NOT_COMPATIBLE;
+        }
+        else if ((singleVmModeData != NV_REG_STR_RM_VGPU_GSP_SINGLE_VM_MODE_ENABLED) &&
+                 (bIsSuperProfile))
+        {
+            // Regkey disabled, set to unknown value, or any non-ENABLED state:
+            // reject super profiles (default behavior)
+            return NV_ERR_NOT_COMPATIBLE;
+        }
+    }
+    else if (bIsSuperProfile)
+    {
+        // Regkey not set: reject super profiles
+        return NV_ERR_NOT_COMPATIBLE;
+    }
+
+    return NV_OK;
+}
+
 NV_STATUS
 vgpuconfigapiCtrlCmdVgpuConfigSetInfo_IMPL
 (
@@ -213,6 +258,9 @@ vgpuconfigapiCtrlCmdVgpuConfigSetInfo_IMPL
         return NV_ERR_INVALID_STATE;
     else
         pPhysGpuInfo->vgpuConfigState = pParams->vgpuConfigState;
+
+    if (NV_OK != vgpuCheckSuperProfileConfig(pGpu, &pParams->vgpuInfo))
+        return NV_ERR_NOT_COMPATIBLE;
 
     rmStatus = kvgpumgrPgpuAddVgpuType(pGpu, pParams->discardVgpuTypes, &pParams->vgpuInfo);
     if (rmStatus != NV_OK)
@@ -364,6 +412,15 @@ vgpuconfigapiCtrlCmdVgpuConfigEnumerateVgpuPerPgpu_IMPL
         pVgpuGuest->guestVmInfo.licenseExpiryTimestamp      = pVgpuGuestGsp->guestVmInfo.licenseExpiryTimestamp;
         pVgpuGuest->guestVmInfo.licenseExpiryStatus         = pVgpuGuestGsp->guestVmInfo.licenseExpiryStatus;
         pVgpuGuest->guestVmInfo.frameRateLimit              = pVgpuGuestGsp->guestVmInfo.frameRateLimit;
+
+        if (pVgpuGuestGsp->guestVmInfo.licenseExpiryStr[0] != '\0'
+            && portStringLength(pVgpuGuestGsp->guestVmInfo.licenseExpiryStr) > 0)
+        {
+            portStringCopy((char *)pVgpuGuest->guestVmInfo.licenseExpiryStr,
+                           sizeof(pVgpuGuest->guestVmInfo.licenseExpiryStr),
+                           (char *)pVgpuGuestGsp->guestVmInfo.licenseExpiryStr,
+                           sizeof(pVgpuGuestGsp->guestVmInfo.licenseExpiryStr));
+        }
 
         portStringCopy((char *) pVgpuGuest->guestVmInfo.guestDriverVersion,
                        sizeof(pVgpuGuest->guestVmInfo.guestDriverVersion),
@@ -525,6 +582,10 @@ vgpuconfigapiCtrlCmdVgpuConfigGetVgpuTypeInfo_IMPL
     pParams->vgpuTypeInfo.gpuDirectSupported = vgpuTypeInfo->gpuDirectSupported;
     pParams->vgpuTypeInfo.nvlinkP2PSupported = vgpuTypeInfo->nvlinkP2PSupported;
     pParams->vgpuTypeInfo.maxInstancePerGI   = vgpuTypeInfo->maxInstancePerGI;
+    pParams->vgpuTypeInfo.pvmrlSchedulingBaseWeightDivisor
+                                             = vgpuTypeInfo->pvmrlSchedulingBaseWeightDivisor;
+    pParams->vgpuTypeInfo.pvmrlSchedulingCap
+                                             = vgpuTypeInfo->pvmrlSchedulingCap;
     pParams->vgpuTypeInfo.multiVgpuExclusive = vgpuTypeInfo->multiVgpuExclusive;
     pParams->vgpuTypeInfo.frlEnable          = vgpuTypeInfo->frlEnable;
     pParams->vgpuTypeInfo.multiVgpuSupported = vgpuTypeInfo->multiVgpuSupported;
@@ -1056,6 +1117,18 @@ vgpuconfigapiCtrlCmdVgpuConfigGetCapability_IMPL
             if (pPhysGpuInfo->numVgpuTypes != 0)
             {
                 pGetCapabilityParams->state = kvgpumgrIsMigTimeslicingModeEnabled(pGpu);
+            }
+            else
+            {
+                pGetCapabilityParams->state = NV_FALSE;
+            }
+            break;
+        }
+        case NVA081_CTRL_VGPU_CAPABILITY_UVM_STUN:
+        {
+            if (pPhysGpuInfo->numVgpuTypes != 0)
+            {
+                pGetCapabilityParams->state = IsADAorBetter(pGpu);
             }
             else
             {

@@ -39,7 +39,8 @@ NV_HEADER_PRESENCE_TESTS = \
   linux/stdarg.h \
   linux/iosys-map.h \
   linux/vfio_pci_core.h \
-  linux/nvgrace-egm.h \
+  cxl/cxl.h \
+  cxl/pci.h \
   linux/cc_platform.h \
   linux/slub_def.h \
   linux/of_gpio.h \
@@ -48,5 +49,6 @@ NV_HEADER_PRESENCE_TESTS = \
   crypto/sig.h \
   drm/drm_colorop.h \
   linux/iommu-dma.h \
+  linux/nvgrace-egm.h \
   linux/sysfb.h
 

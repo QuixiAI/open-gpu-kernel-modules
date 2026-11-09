@@ -197,9 +197,12 @@ namespace DisplayPort
             checkSumValid = false;
             forcedCheckSum = false;
             fallbackEdid = false;
-            // clear the WARFlags
-            _WARFlags temp = {0};
-            WARFlags = temp;
+            patchedChecksum = false;
+            // clear the WARFlags and WARData.
+            _WARFlags flagTemp = {0};
+            _WARData  dataTemp = {0};
+            WARFlags = flagTemp;
+            WARData  = dataTemp;
         }
 
         bool operator== (const Edid & other)
@@ -253,7 +256,7 @@ namespace DisplayPort
 
         EdidReadMultistream(Timer * timer, MessageManager * manager, EdidReadMultistream::EdidReadMultistreamEventSink * sink, Address topologyAddress)
            : topologyAddress(topologyAddress), manager(manager), edidReaderManager(&edid), ddcIndex(0),
-             retries(0), timer(timer), sink(sink)
+             retries(0),i2c_retry(0),timer(timer), sink(sink)
         {
             timer->queueCallback(this, "EDID", MST_EDID_COOLDOWN);
         }
@@ -271,6 +274,7 @@ namespace DisplayPort
         NvU8 DDCAddress;
         NvU8 ddcIndex;
         unsigned retries;
+        unsigned i2c_retry;
         Timer * timer;
 
         void readNextBlock(NvU8 seg, NvU8 offset);

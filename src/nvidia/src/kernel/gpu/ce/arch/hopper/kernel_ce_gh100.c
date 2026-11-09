@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -28,7 +28,7 @@
 #include "gpu/bif/kernel_bif.h"
 #include "platform/chipset/chipset.h"
 
-#include "published/hopper/gh100/dev_ce_base.h"
+#include "published/hopper/gh100/dev_ce_zb.h"
 #include "published/hopper/gh100/dev_xtl_ep_pcfg_gpu.h"
 
 #define NV_CE_INVALID_TOPO_IDX 0xFFFF
@@ -163,7 +163,7 @@ kceGetPce2lceConfigSize1_GH100
     KernelCE *pKCe
 )
 {
-    return NV_CE_BASE_PCE2LCE_CONFIG__SIZE_1;
+    return NV_CE_ZB_PCE2LCE_CONFIG__SIZE_1;
 }
 
 /**
@@ -558,8 +558,8 @@ kceMapPceLceForGRCE_GH100
                 {
                     // GRCE is shared - set the status and shared LCE # in register field
                     lceIndex = pLocalPceLceMap[pceIndex];
-                    pLocalGrceMap[grceIdx] = DRF_NUM(_CE_BASE, _GRCE_CONFIG, _SHARED, 1) |
-                                             DRF_NUM(_CE_BASE, _GRCE_CONFIG, _SHARED_LCE, lceIndex);
+                    pLocalGrceMap[grceIdx] = DRF_NUM(_CE_ZB, _GRCE_CONFIG, _SHARED, 1) |
+                                             DRF_NUM(_CE_ZB, _GRCE_CONFIG, _SHARED_LCE, lceIndex);
                 }
                 else
                 {
@@ -568,8 +568,8 @@ kceMapPceLceForGRCE_GH100
                     lceIndex = CE_GET_LOWEST_AVAILABLE_IDX(lceMask);
                     pLocalPceLceMap[pceIndex] = lceIndex;
                     // Reflect non-sharing status in register field
-                    pLocalGrceMap[grceIdx] = DRF_NUM(_CE_BASE, _GRCE_CONFIG, _SHARED, 0) |
-                                             DRF_DEF(_CE_BASE, _GRCE_CONFIG, _SHARED_LCE, _NONE);
+                    pLocalGrceMap[grceIdx] = DRF_NUM(_CE_ZB, _GRCE_CONFIG, _SHARED, 0) |
+                                             DRF_DEF(_CE_ZB, _GRCE_CONFIG, _SHARED_LCE, _NONE);
                 }
             }
 
@@ -629,8 +629,8 @@ kceMapPceLceForCC
         {
             pLocalPceLceMap[pceIndex] = lceIndex;
             lceMask &= (~(NVBIT32(lceIndex)));
-            pLocalGrceMap[grceIdx] = DRF_NUM(_CE_BASE, _GRCE_CONFIG, _SHARED, 0) |
-                                     DRF_DEF(_CE_BASE, _GRCE_CONFIG, _SHARED_LCE, _NONE);
+            pLocalGrceMap[grceIdx] = DRF_NUM(_CE_ZB, _GRCE_CONFIG, _SHARED, 0) |
+                                     DRF_DEF(_CE_ZB, _GRCE_CONFIG, _SHARED_LCE, _NONE);
             pceIndex++;
         }
     }
@@ -1179,6 +1179,7 @@ NV_STATUS kceGetP2PCes_GH100(KernelCE *pKCe, OBJGPU *pGpu, NvU32 gpuMask, NvU32 
         FOR_EACH_INDEX_IN_MASK(32, phyLinkId, peerLinkMask)
         {
             NvU32 hshubId = params.hshubIds[phyLinkId];
+            NV_ASSERT_OR_RETURN(hshubId < NV_CE_MAX_HSHUBS, NV_ERR_INVALID_STATE);
             linksPerHshub[hshubId]++;
 
             if (linksPerHshub[hshubId] > maxLinksConnectedHshub)
@@ -1188,6 +1189,12 @@ NV_STATUS kceGetP2PCes_GH100(KernelCE *pKCe, OBJGPU *pGpu, NvU32 gpuMask, NvU32 
             }
         }
         FOR_EACH_INDEX_IN_MASK_END;
+
+        // If no peer links were found, maxConnectedHshubId is still the sentinel value
+        if (maxConnectedHshubId >= NV_CE_MAX_HSHUBS)
+        {
+            return NV_OK;
+        }
 
         //
         // Iterate through all Async LCEs to track which HSHUB should

@@ -112,6 +112,8 @@
 
 #define GPU_IMPLEMENTATION_GB10B         0x0B
 
+#define GPU_IMPLEMENTATION_GB10C         0x0C
+
 #define GPU_IMPLEMENTATION_GB110         0x03
 
 #define GPU_IMPLEMENTATION_GB112         0x04
@@ -144,7 +146,7 @@
 
 #define GPU_IMPLEMENTATION_T264D         0x05
 
-#define GPU_IMPLEMENTATION_T239D         0x0B
+#define GPU_IMPLEMENTATION_T238D         0x0B
 
 /* SIMS gpus */
 #define GPU_IMPLEMENTATION_AMODEL        0x00

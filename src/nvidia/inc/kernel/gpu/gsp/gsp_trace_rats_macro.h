@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -33,7 +33,8 @@
 #include "core/core.h"
 
 #define GSP_TRACING_RATS_ENABLED 0
-#define GSP_TRACE_RATS_ADD_RECORD(recordIdentifier, pGpu, info) (void) 0
+#define GSP_TRACE_RATS_ADD_RECORD(recordIdentifier, info64, info32) (void) 0
+#define GSP_TRACE_RATS_ADD_RECORD_WITH_BACKTRACE(recordIdentifier, info64, info32) (void) 0
 
 #include "kernel/gpu/gsp/kernel_gsp_trace_rats.h"
 #include "class/cl90cdtrace.h"

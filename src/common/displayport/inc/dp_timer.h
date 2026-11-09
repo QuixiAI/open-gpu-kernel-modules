@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 1993-2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 1993-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -85,7 +85,19 @@ namespace DisplayPort
 
         //
         //  Queue a timer callback.
-        //      Unless the dont-execute-in-sleep flag is
+        //
+        //  executeInSleep:
+        //      When true (default), the callback is eligible to fire from
+        //      inside Timer::sleep() — i.e. while another method on the same
+        //      object is busy-waiting via timer->sleep(1) (e.g. the
+        //      DPCD_MESSAGE_REPLY_TIMEOUT spin in MessageManager::send()).
+        //
+        //      Callers MUST pass false when the callback mutates state that
+        //      another method reads or modifies while pumping the timer via
+        //      Timer::sleep(). Otherwise the callback re-enters mid-transaction
+        //      and corrupts state (e.g. ECF/HDCP authentication state mutated
+        //      mid-update() while send() spins, causing state-vs-payload
+        //      desync). When in doubt, pass false.
         //
         void queueCallback(Timer::TimerCallback * target, const  void * context, unsigned milliseconds, bool executeInSleep = true);
         NvU64 getTimeUs();
@@ -94,6 +106,7 @@ namespace DisplayPort
 
         void cancelCallback(Timer::TimerCallback * to, const void * context);
         void queueCallbackInOrder(Timer::TimerCallback * target, const  void * context, unsigned milliseconds, bool executeInSleep);
+        void cancelCallbacksWithContext(const  void * context);
         void cancelCallbacksWithoutContext(const  void * context);
         void cancelAllCallbacks();
         bool checkCallbacksOfSameContext(const void * context);

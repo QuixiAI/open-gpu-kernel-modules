@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2006-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2006-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -193,26 +193,6 @@ typedef struct NV2080_CTRL_FIFO_GET_INFO_PARAMS {
 } NV2080_CTRL_FIFO_GET_INFO_PARAMS;
 
 
-
-/*
- * NV2080_CTRL_FIFO_CHANNEL_PREEMPTIVE_REMOVAL
- *
- * This command removes the specified channel from the associated GPU's runlist
- * and then initiates RC recovery.  If the channel is active it will first be preempted.
- *   hChannel
- *     The handle to the channel to be preempted.
- *
- * Possible status values returned are:
- *   NV_OK
- *   NV_ERR_INVALID_CHANNEL
- */
-#define NV2080_CTRL_CMD_FIFO_CHANNEL_PREEMPTIVE_REMOVAL (0x2080110a) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FIFO_INTERFACE_ID << 8) | NV2080_CTRL_FIFO_CHANNEL_PREEMPTIVE_REMOVAL_PARAMS_MESSAGE_ID" */
-
-#define NV2080_CTRL_FIFO_CHANNEL_PREEMPTIVE_REMOVAL_PARAMS_MESSAGE_ID (0xAU)
-
-typedef struct NV2080_CTRL_FIFO_CHANNEL_PREEMPTIVE_REMOVAL_PARAMS {
-    NvHandle hChannel;
-} NV2080_CTRL_FIFO_CHANNEL_PREEMPTIVE_REMOVAL_PARAMS;
 
 /*
  * NV2080_CTRL_CMD_FIFO_DISABLE_CHANNELS
@@ -536,7 +516,7 @@ typedef struct NV2080_CTRL_FIFO_CONFIG_CTXSW_TIMEOUT_PARAMS {
 
 #define NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_MAX_DEVICES         256
 #define NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_MAX_ENTRIES         32
-#define NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_ENGINE_DATA_TYPES   16
+#define NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_ENGINE_DATA_TYPES   18
 #define NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_ENGINE_MAX_PBDMA    2
 #define NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_ENGINE_MAX_NAME_LEN 16
 
@@ -1137,4 +1117,81 @@ typedef struct NV2080_CTRL_FIFO_QUERY_CHANNEL_UNIQUE_ID_PARAMS {
     NvU32    numChannels;
     NvU32    channelUniqueIDs[NV2080_CTRL_CMD_FIFO_MAX_CHANNELS_PER_TSG];
 } NV2080_CTRL_FIFO_QUERY_CHANNEL_UNIQUE_ID_PARAMS;
+/*
+ * NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT
+ *
+ * This command can be used to pass the guest virtual channel id to host
+ *
+ * NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT_PARAMS:
+ *  engineType             [IN]  engine type id as NV2080_ENGINE_TYPE_*
+ *  submitRunlistOffset    [IN]  For Turing+ submission offset of the submitting runlist.
+ *
+ * Channel IDs are maintained on the host via NV2080_CTRL_CMD_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE
+ * and no longer passed in the submit params.
+ *
+ *
+ * Possible status values returned are:
+ *   NV_OK
+ */
+
+#define NV2080_CTRL_CMD_FIFO_VGPU_SWRUNLIST_SUBMIT          (0x20801125) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FIFO_INTERFACE_ID << 8) | NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT_PARAMS_MESSAGE_ID" */
+#define NV2080_CTRL_FIFO_VGPU_SWRUNLIST_MAX_CHANNEL_ENTRIES 1024
+
+#define NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT_PARAMS_MESSAGE_ID (0x25U)
+
+typedef struct NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT_PARAMS {
+    NvU32  engineType;
+    NvU32  submitRunlistOffset;
+    NvBool bUpdateRunlist;
+    NvBool bSkipSubmitRunlist;
+    NvBool bSubmitLastUpdatedRunlist;
+    NvU32  numRunlistEntries;
+} NV2080_CTRL_FIFO_VGPU_SWRUNLIST_SUBMIT_PARAMS;
+#define NV2080_CTRL_CMD_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE                    (0x20801126) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FIFO_INTERFACE_ID << 8) | NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_PARAMS_MESSAGE_ID" */
+#define NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_OP_ADD                 0
+#define NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_OP_REMOVE              1
+#define NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_OP_CLEAR_ALL           2
+#define NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_OP_UPDATE_TSG_PRIORITY 3
+#define NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_LEVEL_REALTIME                0
+#define NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_LEVEL_FOCUS                   1
+#define NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_LEVEL_NORMAL                  2
+#define NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_LEVEL_IDLE                    3
+
+#define NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_PARAMS_MESSAGE_ID (0x26U)
+
+typedef struct NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_PARAMS {
+    NvU32 engineType;
+    NvU32 vChId;
+    NvU32 channelLevel;
+    NvU32 operation;
+} NV2080_CTRL_FIFO_VGPU_SWRUNLIST_CHANNEL_UPDATE_PARAMS;
+
+/*
+ * Internal vGPU-plugin control for preserving HWS channel priority across
+ * migration.  vChId is translated independently on the source and destination;
+ * no host physical channel ID or ownership metadata crosses the migration.
+ * GET returns bValid only for source entries that are still runlist-ready.
+ * Before RESTORE, the plugin clears only the destination GFID's desired state
+ * while preserving last-submitted ownership tombstones.  RESTORE takes
+ * bValid=true and returns true only when the destination channel is ready and
+ * it seeds an empty slot or a submitted tombstone already owned by the
+ * destination GFID.  A false return lets the plugin retain flat scheduling.
+ * ABORT removes partially restored desired state for the destination GFID,
+ * preserves submitted ownership tombstones and the active runlist, and
+ * cancels a pending empty-table purge.
+ */
+#define NV2080_CTRL_CMD_FIFO_VGPU_HWS_CHANNEL_PRIORITY_MIGRATION_STATE        (0x20801127) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_0_FIFO_INTERFACE_ID << 8) | NV2080_CTRL_FIFO_VGPU_HWS_CHANNEL_PRIORITY_MIGRATION_STATE_PARAMS_MESSAGE_ID" */
+#define NV2080_CTRL_FIFO_VGPU_HWS_CHANNEL_PRIORITY_MIGRATION_STATE_OP_GET     0
+#define NV2080_CTRL_FIFO_VGPU_HWS_CHANNEL_PRIORITY_MIGRATION_STATE_OP_RESTORE 1
+#define NV2080_CTRL_FIFO_VGPU_HWS_CHANNEL_PRIORITY_MIGRATION_STATE_OP_ABORT   3
+
+#define NV2080_CTRL_FIFO_VGPU_HWS_CHANNEL_PRIORITY_MIGRATION_STATE_PARAMS_MESSAGE_ID (0x27U)
+
+typedef struct NV2080_CTRL_FIFO_VGPU_HWS_CHANNEL_PRIORITY_MIGRATION_STATE_PARAMS {
+    NvU32  engineType;
+    NvU32  vChId;
+    NvU32  channelLevel;
+    NvU32  operation;
+    NvBool bValid;
+} NV2080_CTRL_FIFO_VGPU_HWS_CHANNEL_PRIORITY_MIGRATION_STATE_PARAMS;
 /* _ctrl2080fifo_h_ */

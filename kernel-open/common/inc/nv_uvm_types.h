@@ -174,7 +174,7 @@ typedef enum
     UVM_GPU_CHANNEL_ENGINE_TYPE_SEC2 = 3,
 } UVM_GPU_CHANNEL_ENGINE_TYPE;
 
-#define UVM_GPU_CHANNEL_MAX_RESOURCES   13
+#define UVM_GPU_CHANNEL_MAX_RESOURCES   14
 
 typedef struct UvmGpuChannelInstanceInfo_tag
 {
@@ -228,7 +228,14 @@ typedef struct UvmGpuChannelInstanceInfo_tag
     volatile NvU32 *workSubmissionOffset;
 
     // Out: channel handle required to ring the doorbell.
+    // Deprecated -- prefer reading from pWorkSubmissionToken below.
     NvU32 workSubmissionToken;
+
+    // Out: Live-updated location backed by the channel's notifier page.
+    // RM writes the current token here whenever it is regenerated (e.g.
+    // runlist rebind, live migration). Must be read before every
+    // doorbell write.
+    volatile NvU32 *pWorkSubmissionToken;
 
     // Out: SMC engine id to which the GR channel is bound, or zero if the GPU
     // does not support SMC or it is a CE channel
@@ -563,11 +570,19 @@ typedef struct UvmPlatformInfo_tag
     // Out: ATS (Address Translation Services) is supported
     NvBool atsSupported;
 
+    // Out: Indicates that at least one non-ats device is present in the
+    // system
+    NvBool nonAtsDevicePresent;
+
     // Out: True if HW trusted execution, such as AMD's SEV-SNP or Intel's TDX,
     // is enabled in the VM, indicating that Confidential Computing must be
     // also enabled in the GPU(s); these two security features are either both
     // enabled, or both disabled.
     NvBool confComputingEnabled;
+
+    // Out: True if GPU supports TDISP on a platform with
+    // AMD's SEV-TIO or Intel's TDX-Connect, or ARM's CCA.
+    NvBool tdispEnabled;
 
     // Out: True if Coherent Driver-based Memory Management (CDMM) is enabled on
     // the system. This implies that the per-GPU cdmmEnabled property will also
@@ -591,6 +606,9 @@ typedef struct UvmGpuConfComputeCaps_tag
 
     // Out: true if key rotation is enabled (for UVM keys) on the GPU
     NvBool bKeyRotationEnabled;
+
+    // Out: true if Baremetal Secure AI mode is enabled on the GPU
+    NvBool bmsaiEnabled;
 } UvmGpuConfComputeCaps;
 
 #define UVM_GPU_NAME_LENGTH 0x40
@@ -718,6 +736,28 @@ typedef struct UvmGpuInfo_tag
     // to direct NVLink peers.
     NvBool nvlDirectConnect;
     NvU64 nvlDirectConnectMemoryWindowStart;
+
+    // Compute GPU has no vidmem, used to detect iGPUs.
+    NvBool gpuArchIsZeroFb;
+
+    struct
+    {
+        // Indicates if fabric-based sysmem access is supported on this GPU
+        NvBool   bSupported;
+
+        // Start of the FLA window mapped to local CPU sysmem
+        NvU64    flaStart;
+
+        // Size of the FLA window starting from flaWindowStart
+        NvU64    flaSize;
+
+        // DMA/IOVA address corresponding to the start of local CPU sysmem
+        NvU64    dmaAddrBase;
+
+        // Indicates if DMA addresses are identity-mapped (no IOMMU translation).
+        // If false, physical sysmem ranges need to be linked into the IOVA range.
+        NvBool   bIdentityDmaMap;
+    } flaWindowForCpuMemNode;
 } UvmGpuInfo;
 
 typedef struct UvmGpuFbInfo_tag

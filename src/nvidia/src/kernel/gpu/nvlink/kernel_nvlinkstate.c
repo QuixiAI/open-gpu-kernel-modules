@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2020-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -27,6 +27,9 @@
 #include "kernel/gpu/nvlink/kernel_ioctrl.h"
 #include "kernel/gpu/mem_sys/kern_mem_sys.h"
 #include "os/os.h"
+#include "gpu/spdm/spdm.h"
+
+#include "kernel/gpu/conf_compute/conf_compute.h"
 
 static NV_STATUS _knvlinkCreateIoctrl(OBJGPU *, KernelNvlink *, NvU32);
 static NV_STATUS _knvlinkFilterDiscoveredLinks(OBJGPU *, KernelNvlink *);
@@ -253,13 +256,63 @@ knvlinkConstructEngine_IMPL
     }
 
     {
-        NVLINK_UNCONTAINED_ERROR_RECOVERY_INFO *pInfo = gpumgrGetNvlinkRecoveryInfo(gpuGetDBDF(pGpu));
+        NVLINK_RESILIENCY_INFO *pInfo = gpumgrGetNvlinkResiliencyInfo(gpuGetDBDF(pGpu));
+        PORT_MEM_ALLOCATOR *pAlloc = portMemAllocatorGetGlobalNonPaged();
+        NvU64 timingLogLgSize = KNVLINK_RESILIENCY_TIMING_LOG_LG2_SIZE;
 
         NV_ASSERT_OR_RETURN(pInfo != NULL, NV_ERR_INVALID_STATE);
+        NV_ASSERT_OR_RETURN(pAlloc != NULL, NV_ERR_NO_MEMORY);
+
+        // Clear the resiliency info
+        portMemSet(pInfo, 0, sizeof(NVLINK_RESILIENCY_INFO));
+        portAtomicSetU32(&pInfo->uvmIdle, NVLINK_RESILIENCY_INFO_UVM_IDLE_NOT_SET);
+
         // Mark recovery info as valid for use by error recovery workqueues
         pInfo->bValid = NV_TRUE;
         pInfo->DomainBusDevice = gpuGetDBDF(pGpu);
         pInfo->active = 0;
+        pInfo->lfmQuiesceRetryCount = 0;
+        pInfo->abmRetryCount = 0;
+
+        pKernelNvlink->uncontainedErrorAbortTimeoutNs = NVLINK_UNCONTAINED_ERROR_ABORT_PERIOD_NS;
+        pKernelNvlink->trafficQuiesceAbortTimeoutNs = NVLINK_TRAFFIC_QUIESCE_ABORT_PERIOD_NS;
+        portAtomicSetU32(&pKernelNvlink->resiliencyTimingSeqCounter, 0U);
+        portAtomicSetU32(&pKernelNvlink->uncontainedRecoverySeqId, 0U);
+        portAtomicSetU32(&pKernelNvlink->trafficQuiesceSeqId, 0U);
+        portAtomicSetU32(&pKernelNvlink->resiliencyTimingWriteCount, 0U);
+
+        if (gpuIsBaremetalSecureAiEnabled(pGpu))
+        {
+            //
+            // A BMSAI system (up to 72 GPUs) could take multiple minutes
+            // to idle traffic and re-program keys across the partition.
+            // TODO: Extend timeout to 15min to start and verify on larger domain sizes
+            //
+            pKernelNvlink->uncontainedErrorAbortTimeoutNs = NVLINK_BMSAI_ERROR_ABORT_PERIOD_NS;
+        }
+
+        // Ringbuf backing capacity is fixed to a power-of-two depth (32 entries).
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, ringbufConstructDynamic(&pKernelNvlink->resiliencyTimingLog,
+            timingLogLgSize,
+            pAlloc));
+
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, knvlinkSetupResiliencyCallbacks_HAL(pGpu, pKernelNvlink, pInfo));
+    }
+
+    {
+        // Enable SPDM for NVLE without CC
+        if (knvlinkIsNvleStandaloneModeEnabled(pGpu, pKernelNvlink))
+        {
+            Spdm *pSpdm = GPU_GET_SPDM(pGpu);
+            if (pSpdm == NULL)
+            {
+                NV_PRINTF(LEVEL_ERROR, "SPDM object is NULL; NVLE without CC can't enable.\n");
+                return NV_ERR_OBJECT_NOT_FOUND;
+            }
+
+            pSpdm->setProperty(pSpdm, PDB_PROP_SPDM_ENABLED, NV_TRUE);
+            NV_PRINTF(LEVEL_INFO, "SPDM is enabled for NVLE without CC.\n");
+        }
     }
 
     return NV_OK;
@@ -378,7 +431,7 @@ knvlinkStateLoad_IMPL
     KernelMIGManager *pKernelMIGManager = GPU_GET_KERNEL_MIG_MANAGER(pGpu);
     NvBool            bMIGNvLinkP2PDisabled = ((pKernelMIGManager != NULL) &&
                                                !kmigmgrIsMIGNvlinkP2PSupported(pGpu, pKernelMIGManager));
-    NvU64             preInitializedLinks;
+    NVLINK_BIT_VECTOR preInitializedLinks;
     NvU32             i;
     OBJTMR            *pTmr = GPU_GET_TIMER(pGpu);
     NVLINK_BIT_VECTOR localBitVector;
@@ -467,7 +520,10 @@ knvlinkStateLoad_IMPL
     bitVectorClrAll(&localBitVector);
 
     NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-        convertMaskToBitVector(~((NvU64)pKernelNvlink->initDisabledLinksMask), &localBitVector));
+        convertMaskToBitVector((NvU64)pKernelNvlink->initDisabledLinksMask, &localBitVector));
+
+    NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+        bitVectorComplement(&localBitVector, &localBitVector));
 
     bitVectorAnd(&pKernelNvlink->discoveredLinks, &pKernelNvlink->discoveredLinks, &localBitVector);
 
@@ -475,7 +531,7 @@ knvlinkStateLoad_IMPL
     bitVectorCopy(&pKernelNvlink->connectedLinksMask, &pKernelNvlink->discoveredLinks);
 
     // Initialize initializedLinks to 0 (assume no links initialized)
-    pKernelNvlink->initializedLinks = 0;
+    bitVectorClrAll(&pKernelNvlink->initializedLinks);
 
     // For GSP-CLIENTs, the link masks and vbios info need to synchronize with GSP
     status = knvlinkSyncLinkMasksAndVbiosInfo(pGpu, pKernelNvlink);
@@ -489,7 +545,7 @@ knvlinkStateLoad_IMPL
     // Save off the links that were previously initialized to be able to
     // optimize away a heavy flush later. This is needed on IBM systems
     //
-    preInitializedLinks = pKernelNvlink->initializedLinks;
+    bitVectorCopy(&preInitializedLinks, &pKernelNvlink->initializedLinks);
 
     // Load link speed if forced from OS
     status = knvlinkProgramLinkSpeed_HAL(pGpu, pKernelNvlink);
@@ -526,10 +582,7 @@ knvlinkStateLoad_IMPL
     //
     if (pKernelNvlink->bRegistryLinkOverride)
     {
-        NVLINK_BIT_VECTOR registryLinkMaskVec;
-        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
-            convertMaskToBitVector(KNVLINK_GET_MASK(pKernelNvlink, registryLinkMask, 64), &registryLinkMaskVec));
-        bitVectorAnd(&pKernelNvlink->enabledLinks, &pKernelNvlink->discoveredLinks, &registryLinkMaskVec);
+        bitVectorAnd(&pKernelNvlink->enabledLinks, &pKernelNvlink->registryLinkMask, &pKernelNvlink->discoveredLinks);
     }
     else if (bMIGNvLinkP2PDisabled)
     {
@@ -545,7 +598,7 @@ knvlinkStateLoad_IMPL
     knvlinkFilterBridgeLinks_HAL(pGpu, pKernelNvlink);
 
     // Disconnected links mask tracks links whose remote ends are not discovered
-    pKernelNvlink->disconnectedLinkMask = KNVLINK_BITVECTOR_TO_MASK(pKernelNvlink, enabledLinks, 64);
+    bitVectorCopy(&pKernelNvlink->disconnectedLinkMask, &pKernelNvlink->enabledLinks);
 
     if (!IS_RTLSIM(pGpu) || pKernelNvlink->bForceEnableCoreLibRtlsims)
     {
@@ -623,7 +676,7 @@ knvlinkStateLoad_IMPL
     //
 
     status = _knvlinkProcessSysmemLinks(pGpu, pKernelNvlink,
-                        (preInitializedLinks != pKernelNvlink->initializedLinks));
+                        !bitVectorTestEqual(&preInitializedLinks, &pKernelNvlink->initializedLinks));
     if (status != NV_OK)
     {
         NV_ASSERT(status == NV_OK);
@@ -867,6 +920,9 @@ knvlinkStatePostLoad_IMPL
     if (!GPU_IS_NVSWITCH_DETECTED(pGpu))
     {
         NV_ASSERT_OK_OR_RETURN(knvlinkSetDirectConnectBaseAddress_HAL(pGpu, pKernelNvlink));
+
+        // Program the GPU ALID for this GPU on the direct connect system and initialize the PTC
+        NV_ASSERT_OK_OR_RETURN(knvlinkInitializeAlidAndPtc_HAL(pGpu, pKernelNvlink));
     }
 
     return NV_OK;
@@ -899,6 +955,12 @@ knvlinkStateUnload_IMPL
     }
 
     knvlinkPostSchedulingEnableCallbackUnregister_HAL(pGpu, pKernelNvlink);
+
+    if (!GPU_IS_NVSWITCH_DETECTED(pGpu))
+    {
+        // Mark the GPU's PTC as unitialized
+        NV_ASSERT_OK_OR_RETURN(knvlinkUninitializePtc_HAL(pGpu, pKernelNvlink));
+    }
 
     return NV_OK;
 }
@@ -1030,7 +1092,7 @@ knvlinkStatePostUnload_IMPL
         {
             KernelNvlink *pRemoteKernelNvlink = GPU_GET_KERNEL_NVLINK(pRemoteGpu);
 
-            pRemoteKernelNvlink->disconnectedLinkMask |= NVBIT64(pKernelNvlink->nvlinkLinks[linkId].remoteEndInfo.linkNumber);
+            bitVectorSet(&pRemoteKernelNvlink->disconnectedLinkMask, pKernelNvlink->nvlinkLinks[linkId].remoteEndInfo.linkNumber);
         }
     }
     FOR_EACH_IN_BITVECTOR_END();
@@ -1270,8 +1332,10 @@ knvlinkIsUncontainedErrorRecoveryActive_IMPL
     KernelNvlink *pKernelNvlink
 )
 {
-    NVLINK_UNCONTAINED_ERROR_RECOVERY_INFO *pInfo = gpumgrGetNvlinkRecoveryInfo(gpuGetDBDF(pGpu));
-    return ((pInfo != NULL) && pInfo->bValid && (portAtomicOrU32(&pInfo->active, 0) != 0));
+    NVLINK_RESILIENCY_INFO *pInfo = gpumgrGetNvlinkResiliencyInfo(gpuGetDBDF(pGpu));
+    return ((pInfo != NULL) && pInfo->bValid &&
+            ((portAtomicOrU32(&pInfo->uncontainedErrorRecovery.active, 0) != 0) ||
+             (portAtomicOrU32(&pInfo->pendingUncontained, 0) != 0)));
 }
 
 void
@@ -1283,6 +1347,7 @@ knvlinkDestruct_IMPL
     OBJGPU       *pGpu          = ENG_GET_GPU(pKernelNvlink);
     KernelIoctrl *pKernelIoctrl = NULL;
     NvU32         ioctrlIdx;
+    NVLINK_RESILIENCY_INFO *pInfo = gpumgrGetNvlinkResiliencyInfo(gpuGetDBDF(pGpu));
 
     // Destroy the RM NVLink state
     _knvlinkPurgeState(pGpu, pKernelNvlink);
@@ -1299,7 +1364,13 @@ knvlinkDestruct_IMPL
     }
 
     // Unload the nvlink core library
+    ringbufDestruct(&pKernelNvlink->resiliencyTimingLog);
     knvlinkCoreDriverUnloadWar(pGpu, pKernelNvlink);
+
+    if (pInfo != NULL)
+    {
+        knvlinkDestroyResiliencyCallbacks_HAL(pGpu, pKernelNvlink, pInfo);
+    }
 }
 
 /**

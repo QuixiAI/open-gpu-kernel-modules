@@ -30,34 +30,17 @@
 #include "kernel/gpu/bus/p2p_api.h"
 #include "kernel/gpu/fifo/kernel_fifo.h"
 #include "gpu/gpu_fabric_probe.h"
+#include "events/gpu/nvlink/nvlink_events.h"
+#include "nvoc/event_bus.h"
 #include "rmapi/rs_utils.h"
+
+#include "lib/protobuf/prb_util.h"
+#include "g_nvdebug_pb.h"
+
+#define NVLINK_FABRIC_HEALTH_MASK_TIMER_DELAY_NS    60000000000ULL
 
 static void _knvlinkP2PIdleCallback(OBJGPU *pGpu, void *pArgs);
 void knvlinkABM_WORKITEM(OBJGPU *pGpu, void *pArgs);
-
-/*!
- * @brief Get the supported counters for the given NVLink instance
- *
- * @param[in]  pGpu      OBJGPU pointer
- * @param[in]  pKernelNvlink   KernelNvlink pointer
- * @param[out] pParams   NV2080_CTRL_NVLINK_GET_SUPPORTED_COUNTERS_PARAMS pointer
- */
-NV_STATUS
-knvlinkGetSupportedCounters_GB100
-(
-    OBJGPU *pGpu,
-    KernelNvlink *pKernelNvlink,
-    NV2080_CTRL_NVLINK_GET_SUPPORTED_COUNTERS_PARAMS *pParams
-)
-{
-    NV_ASSERT_OR_RETURN((pParams != NULL), NV_ERR_INVALID_ARGUMENT);
-
-    portMemCopy(pParams, sizeof(*pParams),
-                &pKernelNvlink->supportedCounterMask,
-                sizeof(NV2080_CTRL_NVLINK_GET_SUPPORTED_COUNTERS_PARAMS));
-
-    return NV_OK;
-}
 
 /*!
  * @brief Report a link training failure and dump error info to logs
@@ -72,10 +55,10 @@ knvlinkLogAliDebugMessages_GB100
 {
     NV_STATUS status;
     NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS *pParams;
-    NVLINK_BIT_VECTOR linkVec;
-    NvU32 failures[7];
-    NvU32 failure;
     NvU32 link;
+    NvU8 goeFailureLinkIds[NVLINK_ALI_TRAINING_FAILURE_MAX_ENTRIES];
+    NvU32 goeFailures[NVLINK_ALI_TRAINING_FAILURE_MAX_ENTRIES];
+    NvU32 goeFailureCount = 0;
 
     pParams = portMemAllocNonPaged(sizeof(NV2080_CTRL_NVLINK_GET_ERR_INFO_PARAMS));
     if (pParams == NULL)
@@ -92,10 +75,6 @@ knvlinkLogAliDebugMessages_GB100
         portMemFree(pParams);
         return status; );
 
-    bitVectorClrAll(&linkVec);
-    failure = 0;
-    portMemSet(failures, 0x0, sizeof(failures));
-
     FOR_EACH_IN_BITVECTOR(&pKernelNvlink->postRxDetLinkMask, link)
     {
         if ((pParams->linkErrInfo[link].DLStatMN00 & 0xffff) != 0x0)
@@ -105,30 +84,187 @@ knvlinkLogAliDebugMessages_GB100
                       link,
                       pParams->linkErrInfo[link].DLStatMN00);
 
-            if (failure < NV_ARRAY_ELEMENTS(failures))
-                failures[failure++] = pParams->linkErrInfo[link].DLStatMN00;
-
-            bitVectorSet(&linkVec, link);
+            if (goeFailureCount < NVLINK_ALI_TRAINING_FAILURE_MAX_ENTRIES)
+            {
+                goeFailures[goeFailureCount] = pParams->linkErrInfo[link].DLStatMN00;
+                goeFailureLinkIds[goeFailureCount] = (NvU8)link;
+                goeFailureCount++;
+            }
         }
     }
     FOR_EACH_IN_BITVECTOR_END();
 
     if (bFinal)
     {
-        nvErrorLog_va((void *)pGpu, ALI_TRAINING_FAIL,
-                      "NVLink: Link training failed for links " NV_BITVECTOR_INLINE_FMTX "(0x%x, 0x%x, 0x%x, 0x%x, 0x%x, 0x%x, 0x%x)\n",
-                      NV_BITVECTOR_INLINE_PRINTF_ARG(&linkVec),
-                      failures[0],
-                      failures[1],
-                      failures[2],
-                      failures[3],
-                      failures[4],
-                      failures[5],
-                      failures[6]);
+        eventEmit(NvlinkAliTrainingFailure,
+                  pKernelNvlink,
+                  OPERATIONAL_EVENT_SEVERITY_FATAL,
+                  goeFailureCount,
+                  1,
+                  goeFailureLinkIds,
+                  goeFailures);
+        eventEmit(NvlinkAliTrainingFailureLegacy,
+                  pKernelNvlink,
+                  OPERATIONAL_EVENT_SEVERITY_FATAL,
+                  goeFailureCount,
+                  1,
+                  goeFailureLinkIds,
+                  goeFailures,
+                  ALI_TRAINING_FAIL);
         gpuNotifySubDeviceEvent(pGpu, NV2080_NOTIFIERS_NVLINK_ERROR_FATAL, NULL, 0, 0x0, ALI_TRAINING_FAIL);
     }
 
     portMemFree(pParams);
+    return NV_OK;
+}
+
+/**  Dumps out the network config regs and remap table for each link in raw bytes format
+ * Format of bytes per link
+ * Dword 0: Link id
+ * Dword 1-10: Network config regs
+ * Dword 11: FLA Remap Table Address
+ * Dword 12: FLA Remap Table Data0
+ * Dword 13: FLA Remap Table Data1
+ * ... repeats for all 4096 entries
+ * Dword 12,288: NODE Remap Table Address
+ * Dword 12,289: NODE Remap Table Data0
+ * Dword 12,290: NODE Remap Table Data1
+ * ... repeats for all 64 entries
+ */
+static NV_STATUS
+_knvlinkDumpRemapTableEngineFunc
+(
+    OBJGPU *pGpu,
+    PRB_ENCODER *pPrbEnc,
+    NVD_STATE   *pNvDumpState,
+    void        *pvData
+)
+{
+    KernelNvlink *pKernelNvlink = (KernelNvlink *)pvData;
+    NvU8 startingDepth = prbEncNestingLevel(pPrbEnc);
+    NV_STATUS status = NV_OK;
+    NvBool bRemapTableStart = NV_FALSE;
+    NV2080_CTRL_INTERNAL_NVLINK_GET_REMAP_TABLE_DUMP_PARAMS *pParams;
+    NVLINK_BIT_VECTOR *pEnabledLinksVec;
+    NvU32 link;
+    NvU32 i;
+
+    NV_ASSERT_OR_RETURN((pGpu != NULL) && (pKernelNvlink != NULL), NV_ERR_INVALID_ARGUMENT);
+
+    // Skip dumping remap table if NVLE is enabled
+    if (knvlinkIsNvleEnabled_HAL(pGpu, pKernelNvlink))
+    {
+        return NV_OK;
+    }
+
+    pParams = portMemAllocNonPaged(sizeof(NV2080_CTRL_INTERNAL_NVLINK_GET_REMAP_TABLE_DUMP_PARAMS));
+    if (pParams == NULL)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Failed to allocate memory for remap table dump params\n");
+        goto exit;
+    }
+
+    NV_CHECK_OK_OR_GOTO(status, LEVEL_ERROR, 
+        prbEncNestedStart(pPrbEnc, NVDEBUG_GPUINFO_ENG_NVLINK_REMAP_TABLE), exit);
+    bRemapTableStart = NV_TRUE;
+
+    // dump out remap table
+    pEnabledLinksVec = knvlinkGetEnabledLinkMask(pGpu, pKernelNvlink);
+    FOR_EACH_IN_BITVECTOR(pEnabledLinksVec, link)
+    {
+        portMemSet(pParams, 0, sizeof(*pParams));
+        pParams->linkId = link;
+        status = knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
+                                            NV2080_CTRL_CMD_INTERNAL_NVLINK_GET_REMAP_TABLE_DUMP,
+                                            (void *)pParams,
+                                            sizeof(NV2080_CTRL_INTERNAL_NVLINK_GET_REMAP_TABLE_DUMP_PARAMS));
+        if (status != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR, "NV2080_CTRL_CMD_NVLINK_GET_REMAP_TABLE_DUMP failed with status: 0x%x\n", status);
+            goto exit;
+        }
+
+        // Dump link id
+        status = prbEncAddBytes(pPrbEnc, NVDEBUG_ENG_NVLINKREMAPTABLE_REMAP_TABLE, (NvU8 *)&link, sizeof(NvU32));
+        if (status != NV_OK)
+        {
+            NV_PRINTF(LEVEL_ERROR, "Failed to dump link id, status=%x\n", status);
+            goto exit;
+        }
+
+        // Dump network config regs
+        for (i = 0; i < NV_ARRAY_ELEMENTS(pParams->networkConfigRegs); i++)
+        {
+            status = prbEncAddBytes(pPrbEnc, NVDEBUG_ENG_NVLINKREMAPTABLE_REMAP_TABLE, (NvU8 *)&pParams->networkConfigRegs[i], sizeof(NvU32));
+            if (status != NV_OK)
+            {
+                NV_PRINTF(LEVEL_ERROR, "Failed to dump network config reg %d, status=%x\n", i, status);
+                goto exit;
+            }
+        }
+
+        // Dump remap table data
+        for (i = 0; i < NV2080_CTRL_INTERNAL_NVLINK_FLA_REMAP_TABLE_MAX_REMAP_ENTRIES; i++)
+        {
+            status = prbEncAddBytes(pPrbEnc, NVDEBUG_ENG_NVLINKREMAPTABLE_REMAP_TABLE, (NvU8 *)&i, sizeof(NvU32));
+            if (status != NV_OK)
+            {
+                NV_PRINTF(LEVEL_ERROR, "Failed to dump FLA remap table index %d, status=%x\n", i, status);
+                goto exit;
+            }
+            status = prbEncAddBytes(pPrbEnc, NVDEBUG_ENG_NVLINKREMAPTABLE_REMAP_TABLE, (NvU8 *)&pParams->flaRemapData0[i], sizeof(NvU32));
+            if (status != NV_OK)
+            {
+                NV_PRINTF(LEVEL_ERROR, "Failed to dump FLA remap table index %d data 0, status=%x\n", i, status);
+                goto exit;
+            }
+            status = prbEncAddBytes(pPrbEnc, NVDEBUG_ENG_NVLINKREMAPTABLE_REMAP_TABLE, (NvU8 *)&pParams->flaRemapData1[i], sizeof(NvU32));
+            if (status != NV_OK)
+            {
+                NV_PRINTF(LEVEL_ERROR, "Failed to dump FLA remap table index %d data 1, status=%x\n", i, status);
+                goto exit;
+            }
+        }
+
+        // Dump node table data
+        for (i = 0; i < NV2080_CTRL_INTERNAL_NVLINK_NODE_REMAP_TABLE_MAX_REMAP_ENTRIES; i++)
+        {
+            status = prbEncAddBytes(pPrbEnc, NVDEBUG_ENG_NVLINKREMAPTABLE_REMAP_TABLE, (NvU8 *)&i, sizeof(NvU32));
+            if (status != NV_OK)
+            {
+                NV_PRINTF(LEVEL_ERROR, "Failed to dump node remap table index %d, status=%x\n", i, status);
+                goto exit;
+            }
+            status = prbEncAddBytes(pPrbEnc, NVDEBUG_ENG_NVLINKREMAPTABLE_REMAP_TABLE, (NvU8 *)&pParams->nodeRemapData0[i], sizeof(NvU32));
+            if (status != NV_OK)
+            {
+                NV_PRINTF(LEVEL_ERROR, "Failed to dump node remap table index %d data, status=%x\n", i, status);
+                goto exit;
+            }
+            status = prbEncAddBytes(pPrbEnc, NVDEBUG_ENG_NVLINKREMAPTABLE_REMAP_TABLE, (NvU8 *)&pParams->nodeRemapData1[i], sizeof(NvU32));
+            if (status != NV_OK)
+            {
+                NV_PRINTF(LEVEL_ERROR, "Failed to dump node remap table index %d data, status=%x\n", i, status);
+                goto exit;
+            }
+        }
+    }
+    FOR_EACH_IN_BITVECTOR_END();
+
+exit:
+    if (bRemapTableStart)
+    {
+        // Unwind the protobuf to the correct depth.
+        NV_CHECK_OK_OR_CAPTURE_FIRST_ERROR(status, LEVEL_ERROR,
+            prbEncUnwindNesting(pPrbEnc, startingDepth));
+    }
+
+    if (pParams != NULL)
+    {
+        portMemFree(pParams);
+        pParams = NULL;
+    }
+    // Squash status to ensure remainder of dump can be collected
     return NV_OK;
 }
 
@@ -152,7 +288,7 @@ knvlinkDumpCallbackRegister_GB100
     // See if already registered (can be if have multiple)
     if ((nvdFindEngine(pGpu, pNvd, NVDUMP_COMPONENT_ENG_NVLINK, &pEngineCallback) == NV_OK) &&
         (pEngineCallback != NULL))
-        return;
+        goto engine_signup_remap_table;;
 
     // Required to sign up for nvlink callback in Kernel RM in order to dump contents in GSP RM
     nvdEngineSignUp(pGpu,
@@ -161,6 +297,21 @@ knvlinkDumpCallbackRegister_GB100
                     NVDUMP_COMPONENT_ENG_NVLINK,
                     REF_DEF(NVD_ENGINE_FLAGS_PRIORITY, _MED) |
                     REF_DEF(NVD_ENGINE_FLAGS_SOURCE,   _GSP),
+                    (void *)pKernelNvlink);
+
+engine_signup_remap_table:
+    // See if already registered (can be if have multiple)
+    if ((nvdFindEngine(pGpu, pNvd, NVDUMP_COMPONENT_ENG_NVLINK_REMAP_TABLE, &pEngineCallback) == NV_OK) &&
+        (pEngineCallback != NULL))
+        return;
+
+    // Required to sign up for nvlink callback in Kernel RM in order to dump contents in GSP RM
+    nvdEngineSignUp(pGpu,
+                    pNvd,
+                    _knvlinkDumpRemapTableEngineFunc,
+                    NVDUMP_COMPONENT_ENG_NVLINK_REMAP_TABLE,
+                    REF_DEF(NVD_ENGINE_FLAGS_PRIORITY, _MED) |
+                    REF_DEF(NVD_ENGINE_FLAGS_SOURCE,   _CPU),
                     (void *)pKernelNvlink);
 }
 
@@ -299,7 +450,7 @@ knvlinkGetEffectivePeerLinkMask_GB100
             NV_CHECK_OK_OR_ELSE(status, LEVEL_ERROR,
                 bitVectorAnd(pPeerLinkMask, pPeerLinkMask, &complementLinkMaskToBeReducedVec),
                 return; );
-            NV_PRINTF(LEVEL_INFO, "Reducing nvlinkMask from "NV_BITVECTOR_INLINE_FMTX" to updated "NV_BITVECTOR_INLINE_FMTX"\n", 
+            NV_PRINTF(LEVEL_INFO, "Reducing nvlinkMask from "NV_BITVECTOR_INLINE_FMTX" to updated "NV_BITVECTOR_INLINE_FMTX"\n",
                 NV_BITVECTOR_INLINE_PRINTF_ARG(&linkMaskToBeReduced), NV_BITVECTOR_INLINE_PRINTF_ARG(pPeerLinkMask));
         }
     }
@@ -397,7 +548,7 @@ knvlinkABMIdle_WORKITEM
     }
 
     bitVectorAnd(&linkMask, pEnabledLinksVec, &pKernelNvlink->pendingAbmLinkMaskToBeReduced);
-    NV_PRINTF(LEVEL_NOTICE, "GPU%u Detected fabric idle. Applying linkMask "NV_BITVECTOR_INLINE_FMTX" and Unmarking Drain P2P.\n", 
+    NV_PRINTF(LEVEL_NOTICE, "GPU%u Detected fabric idle. Applying linkMask "NV_BITVECTOR_INLINE_FMTX" and Unmarking Drain P2P.\n",
                 gpuInstance, NV_BITVECTOR_INLINE_PRINTF_ARG(&linkMask));
 
     // Reuse linkMaskToBeReduced so RBM/ABM flows are the same
@@ -408,6 +559,11 @@ knvlinkABMIdle_WORKITEM
     pGpu->setProperty(pGpu, PDB_PROP_GPU_RECOVERY_SQUASH_XID154, NV_FALSE);
 
     osRemove1HzCallback(pGpu, knvlinkABM_WORKITEM, pArgs);
+
+    knvlinkSetAmapUpdateStatus(pGpu, pKernelNvlink,
+        NVLINK_INBAND_GPU_GET_CURRENT_STATE_GPU_STATE_FLAGS_READY_FOR_TRAFFIC_TRUE,
+        NVLINK_INBAND_GPU_GET_CURRENT_STATE_GPU_STATE_FLAGS_AMAP_UPDATE_PENDING_FALSE,
+        NVLINK_INBAND_GPU_GET_CURRENT_STATE_GPU_STATE_FLAGS_AMAP_UPDATE_FAILED_FALSE);
 }
 
 void
@@ -429,6 +585,10 @@ knvlinkABM_WORKITEM
 
     if (status != NV_OK)
     {
+        knvlinkSetAmapUpdateStatus(pGpu, GPU_GET_KERNEL_NVLINK(pGpu),
+            NVLINK_INBAND_GPU_GET_CURRENT_STATE_GPU_STATE_FLAGS_READY_FOR_TRAFFIC_FALSE,
+            NVLINK_INBAND_GPU_GET_CURRENT_STATE_GPU_STATE_FLAGS_AMAP_UPDATE_PENDING_FALSE,
+            NVLINK_INBAND_GPU_GET_CURRENT_STATE_GPU_STATE_FLAGS_AMAP_UPDATE_FAILED_TRUE);
         NV_PRINTF(LEVEL_ERROR, "Failed to queue P2P idle check.\n");
     }
 }
@@ -458,6 +618,146 @@ knvlinkABMLinkMaskUpdate_GB100
 
     // Launch repeated 1Hz workitem to await drainP2P completion and apply link mask
     (void)osSchedule1HzCallback(pGpu, knvlinkABM_WORKITEM, NULL, NV_OS_1HZ_REPEAT);
+
+    return NV_OK;
+}
+
+static NvBool
+_knvlinkIsGfmLinkMaskActive
+(
+    OBJGPU *pGpu
+)
+{
+    KernelNvlink *pKernelNvlink = GPU_GET_KERNEL_NVLINK(pGpu);
+    NVLINK_BIT_VECTOR linkMaskToBeReduced;
+    NVLINK_BIT_VECTOR complementLinkMaskToBeReducedVec;
+    NVLINK_BIT_VECTOR activeLinkMaskVec;
+    NvU32  i;
+    NvBool bIsGfmLinkMaskActive = NV_TRUE;
+    NV_STATUS status = NV_OK;
+
+    NVLINK_BIT_VECTOR *pEnabledLinksVec = knvlinkGetEnabledLinkMask(pGpu, pKernelNvlink);
+    bitVectorClrAll(&activeLinkMaskVec);
+    bitVectorClrAll(&complementLinkMaskToBeReducedVec);
+    bitVectorClrAll(&linkMaskToBeReduced);
+
+    // Check if active link mask matches link mask from GFM
+    gpuFabricProbeGetlinkMaskToBeReduced(pGpu->pGpuFabricProbeInfoKernel, &linkMaskToBeReduced);
+    bitVectorComplement(&complementLinkMaskToBeReducedVec, &linkMaskToBeReduced);
+    bitVectorAnd(&activeLinkMaskVec, pEnabledLinksVec, &complementLinkMaskToBeReducedVec);
+
+    NV2080_CTRL_INTERNAL_NVLINK_ARE_LINKS_TRAINED_PARAMS linkTrainedParams;
+
+    portMemSet(&linkTrainedParams, 0, sizeof(linkTrainedParams));
+    linkTrainedParams.bActiveOnly = NV_TRUE;
+
+    NV_CHECK_OK_OR_ELSE(status, LEVEL_ERROR,
+        convertBitVectorToLinkMasks(&activeLinkMaskVec, NULL, 0, &linkTrainedParams.linkMask), return NV_FALSE;);
+
+
+    NV_CHECK_OK_OR_ELSE(status, LEVEL_ERROR,
+        knvlinkExecGspRmRpc(pGpu, pKernelNvlink,
+                                     NV2080_CTRL_CMD_INTERNAL_NVLINK_ARE_LINKS_TRAINED,
+                                     &linkTrainedParams, sizeof(linkTrainedParams)),
+                                     return NV_FALSE;);
+
+    FOR_EACH_IN_BITVECTOR(&activeLinkMaskVec, i)
+    {
+        if (!linkTrainedParams.bIsLinkActive[i])
+        {
+            bIsGfmLinkMaskActive = NV_FALSE;
+            break;
+        }
+    }
+    FOR_EACH_IN_BITVECTOR_END();
+
+    return bIsGfmLinkMaskActive;
+}
+
+static NV_STATUS
+knvlinkFabricHealthMask_WORKITEM
+(
+    OBJGPU *pGpu,
+    OBJTMR *pTmr,
+    TMR_EVENT *pEvent
+)
+{
+    KernelNvlink *pKernelNvlink = GPU_GET_KERNEL_NVLINK(pGpu);
+    NvU32 healthStatusMask = 0;
+
+    // Get current fabric health status mask
+    gpuFabricProbeGetFabricHealthStatus(pGpu->pGpuFabricProbeInfoKernel, &healthStatusMask);
+    healthStatusMask = FLD_SET_DRF(LINK, _INBAND_FABRIC_HEALTH_MASK, _ROUTE_UPDATE,
+        _FALSE, healthStatusMask);
+
+    if (!_knvlinkIsGfmLinkMaskActive(pGpu))
+    {
+        healthStatusMask = FLD_SET_DRF(LINK, _INBAND_FABRIC_HEALTH_MASK, _INCORRECT_CONFIGURATION,
+                                           _INSUFFICIENT_NVLINKS, healthStatusMask);
+        gpuFabricProbeDegradeCliques(pGpu);
+    }
+
+    gpuFabricProbeOverrideFabricHealthStatus(pGpu->pGpuFabricProbeInfoKernel, healthStatusMask);
+    tmrEventDestroy(pTmr, pEvent);
+    pKernelNvlink->pFabricHealthMaskTmrEvent = NULL;
+    return NV_OK;
+}
+
+NV_STATUS
+knvlinkAbmFabricHealthMaskUpdate_GB100
+(
+    OBJGPU *pGpu,
+    KernelNvlink *pKernelNvlink
+)
+{
+    OBJTMR *pTmr = GPU_GET_TIMER(pGpu);
+    NV_STATUS status;
+
+    if (!gpuFabricProbeIsReceived(pGpu->pGpuFabricProbeInfoKernel))
+    {
+        return NV_OK;
+    }
+
+    if (_knvlinkIsGfmLinkMaskActive(pGpu))
+    {
+        return NV_OK;
+    }
+
+    if (pKernelNvlink->pFabricHealthMaskTmrEvent == NULL)
+    {
+        NvU32 healthStatusMask = 0;
+
+        NV_CHECK_OK_OR_RETURN(LEVEL_ERROR,
+            tmrEventCreate(pTmr, &pKernelNvlink->pFabricHealthMaskTmrEvent,
+                           knvlinkFabricHealthMask_WORKITEM, NULL, TMR_FLAGS_NONE));
+
+        status = tmrEventScheduleRel(pTmr, pKernelNvlink->pFabricHealthMaskTmrEvent,
+                                     NVLINK_FABRIC_HEALTH_MASK_TIMER_DELAY_NS);
+        if (status != NV_OK)
+        {
+            tmrEventDestroy(pTmr, pKernelNvlink->pFabricHealthMaskTmrEvent);
+            pKernelNvlink->pFabricHealthMaskTmrEvent = NULL;
+            return status;
+        }
+
+        gpuFabricProbeGetFabricHealthStatus(pGpu->pGpuFabricProbeInfoKernel, &healthStatusMask);
+        healthStatusMask = FLD_SET_DRF(LINK, _INBAND_FABRIC_HEALTH_MASK, _ROUTE_UPDATE,
+                                           _TRUE, healthStatusMask);
+        gpuFabricProbeOverrideFabricHealthStatus(pGpu->pGpuFabricProbeInfoKernel, healthStatusMask);
+    }
+    else
+    {
+        // Cancel running timer event if new link error occurs before 60 seconds and kick off new timer event
+        tmrEventCancel(pTmr, pKernelNvlink->pFabricHealthMaskTmrEvent);
+        status = tmrEventScheduleRel(pTmr, pKernelNvlink->pFabricHealthMaskTmrEvent,
+                                     NVLINK_FABRIC_HEALTH_MASK_TIMER_DELAY_NS);
+        if (status != NV_OK)
+        {
+            tmrEventDestroy(pTmr, pKernelNvlink->pFabricHealthMaskTmrEvent);
+            pKernelNvlink->pFabricHealthMaskTmrEvent = NULL;
+            return status;
+        }
+    }
 
     return NV_OK;
 }
@@ -520,6 +820,7 @@ knvlinkGetEncryptionBits_GB100
 
     pKernelNvlink->bMmuNvlinkEncryptEn = params.bMmuNvlinkEncryptEn;
     pKernelNvlink->bNvlinkTlwEncryptEn = params.bNvlinkTlwEncryptEn;
+    pKernelNvlink->bNvlinkTlwSelectiveEncryptionEn = params.bNvlinkTlwSelectiveEncryptionEn;
 
     return NV_OK;
 }
@@ -544,27 +845,44 @@ knvlinkIsNvleEnabled_GB100
     if (pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED))
     {
         //
-        // On MODS and for NVLE Qual mode verification, just check for PDB_PROP_KNVLINK_ENCRYPTION_ENABLED,
-        // for other use-cases, check the following settings as well
+        // On MODS and for NVLE Qual mode verification, update PDB_PROP_KNVLINK_ENCRYPTION_ENABLED
+        // from HW readback bits. For other use-cases, check the following settings as well.
         //
         if (!RMCFG_FEATURE_MODS_FEATURES && !pKernelNvlink->bNvleQualModeRegkey)
         {
             //
             // Disable Nvlink encryption if :
             //   1. Nvlink TLW Encrypt Enable Bit is not set by FSP, OR
-            //   2. Nvlink encryption needs to be enabled with CC, but both NVLE and CC are disabled
+            //   2. Nvlink encryption needs to be enabled with CC, but both NVLE and CC are disabled, OR
+            //   3. Nvlink encryption can be enabled without CC, but both NVLE and TLW Encrypt Enable bit are disabled
             //
             if (!pKernelNvlink->bNvlinkTlwEncryptEn
                 || (pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC) &&
                     !gpuIsNvleModeEnabledInHw_HAL(pGpu) && !gpuIsCCEnabledInHw_HAL(pGpu))
+                || (!pKernelNvlink->getProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENABLE_ENCRYPTION_WITH_CC) &&
+                   (!gpuIsNvleModeEnabledInHw_HAL(pGpu) && !pKernelNvlink->bNvlinkTlwEncryptEn))
                 )
             {
                 // This is an error case
                 NV_PRINTF(LEVEL_ERROR,
                           "Disabling Nvlink encryption, since, either TLW Encrypt Enable bit is not set"
-                          " OR CC is disabled\n");
+                          " OR CC is disabled OR NVLE bit is not set\n");
                 pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED, NV_FALSE);
             }
+
+            if (pKernelNvlink->bNvlinkTlwEncryptEn && pKernelNvlink->bNvlinkTlwSelectiveEncryptionEn)
+            {
+                pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_SELECTIVE_ENCRYPTION_ENABLED, pKernelNvlink->bNvlinkTlwSelectiveEncryptionEn);
+            }
+        }
+        else
+        {
+            NvBool bNvleEnabled = pKernelNvlink->bMmuNvlinkEncryptEn &&
+                                  pKernelNvlink->bNvlinkTlwEncryptEn;
+
+            pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_ENCRYPTION_ENABLED, bNvleEnabled);
+            pKernelNvlink->setProperty(pKernelNvlink, PDB_PROP_KNVLINK_SELECTIVE_ENCRYPTION_ENABLED,
+                                       bNvleEnabled && pKernelNvlink->bNvlinkTlwSelectiveEncryptionEn);
         }
     }
 

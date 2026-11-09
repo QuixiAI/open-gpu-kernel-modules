@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2013-2015 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2013-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -154,8 +154,7 @@ NvBool nvGetStereoEvo(const NVDispEvoRec *pDispEvo, const NvU32 head);
 struct NvKmsCompositionParams nvDefaultCursorCompositionParams(const NVDevEvoRec *pDevEvo);
 NvBool nvAllocCoreChannelEvo(NVDevEvoPtr pDevEvo);
 void nvFreeCoreChannelEvo(NVDevEvoPtr pDevEvo);
-
-void nvEvoUpdateSliVideoBridge(NVDevEvoPtr pDevEvo);
+void nvUpdateCoreFid(NVDispEvoPtr pDispEvo, const NvU32 apiHead, NVEvoUpdateState *pUpdateState);
 
 void nvSetDVCEvo(NVDispEvoPtr pDispEvo,
                  const NvU32 head,
@@ -168,9 +167,12 @@ NvBool nvLayerSetPositionEvo(
 
 NvBool nvConstructHwModeTimingsEvo(const NVDpyEvoRec *pDpyEvo,
                                    const struct NvKmsMode *pKmsMode,
+                                   const enum NvYuv420Mode yuv420Mode,
                                    const struct NvKmsSize *pViewPortSizeIn,
                                    const struct NvKmsRect *pViewPortOut,
                                    const NvBool dscPassThrough,
+                                   const NvBool colorFormatSpecified,
+                                   const NvBool colorBpcSpecified,
                                    NVDpyAttributeColor *pDpyColor,
                                    NVHwModeTimingsEvoPtr pTimings,
                                    const struct NvKmsModeValidationParams
@@ -188,17 +190,17 @@ NvBool nvConstructHwModeTimingsImpCheckEvo(
     NvU32                                  *pNumHeads,
     NVEvoInfoStringPtr                      pInfoString);
 
-NvBool nvDowngradeColorBpc(
-    const NvKmsDpyOutputColorFormatInfo *pSupportedColorFormats,
-    NVDpyAttributeColor *pDpyColor);
-
 NvBool nvDowngradeColorFormatAndBpc(
     const NVDpyEvoRec *pDpyEvo,
     const NvKmsDpyOutputColorFormatInfo *pSupportedColorFormats,
+    const NvBool colorFormatSpecified,
+    const NvBool colorBpcSpecified,
     NVDpyAttributeColor *pDpyColor);
 
 NvBool nvDPValidateModeEvo(NVDpyEvoPtr pDpyEvo,
                            NVHwModeTimingsEvoPtr pTimings,
+                           const NvBool colorFormatSpecified,
+                           const NvBool colorBpcSpecified,
                            NVDpyAttributeColor *pDpyColor,
                            const NvBool b2Heads1Or,
                            NVDscInfoEvoRec *pDscInfo,
@@ -262,7 +264,7 @@ NvBool nvValidateSetLutCommonParams(
     const NVDevEvoRec *pDevEvo,
     const struct NvKmsSetLutCommonParams *pParams);
 
-NvBool nvChooseColorRangeEvo(
+void nvChooseColorRangeEvo(
     const enum NvKmsDpyAttributeColorRangeValue requestedColorRange,
     const enum NvKmsDpyAttributeCurrentColorFormatValue colorFormat,
     const enum NvKmsDpyAttributeColorBpcValue colorBpc,
@@ -369,6 +371,25 @@ NvBool nvGetDefaultDpyColor(
     const NvKmsDpyOutputColorFormatInfo *pColorFormatsInfo,
     NVDpyAttributeColor *pDpyColor);
 
+static inline enum NvKmsDpyAttributeCurrentColorFormatValue
+nvGetCurrentColorFormatFromRequested(
+    const enum NvKmsDpyAttributeRequestedColorFormatValue requested
+)
+{
+    switch (requested) {
+        case NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_RGB:
+            return NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_FORMAT_RGB;
+        case NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_YCbCr444:
+            return NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_FORMAT_YCbCr444;
+        case NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_YCbCr422:
+            break;
+        case NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_FORMAT_UNKNOWN:
+            nvAssert(!"Invalid requested to current color format conversion");
+    }
+
+    return NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_FORMAT_YCbCr422;
+}
+
 static inline void nvEvoSetFlipOccurredEvent(const NVDispEvoRec *pDispEvo,
                                              const NvU32 head,
                                              const NvU32 layer,
@@ -417,7 +438,7 @@ NvBool nvEvoUse2Heads1OR(const NVDpyEvoRec *pDpyEvo,
                          const NVHwModeTimingsEvo *pTimings,
                          const struct NvKmsModeValidationParams *pParams);
 
-NvU32 nvGetRefreshRate10kHz(const NVHwModeTimingsEvo *pTimings);
+NvU32 nvGetRefreshRatex10K(const NVHwModeTimingsEvo *pTimings);
 
 NvBool nvIsLockGroupFlipLocked(const NVLockGroup *pLockGroup);
 

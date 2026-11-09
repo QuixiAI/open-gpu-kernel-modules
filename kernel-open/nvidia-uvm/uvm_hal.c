@@ -1,5 +1,5 @@
 /*******************************************************************************
-    Copyright (c) 2015-2025 NVIDIA Corporation
+    Copyright (c) 2015-2026 NVIDIA Corporation
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -222,6 +222,8 @@ static uvm_hal_class_ops_t host_table[] =
             .tlb_flush_prefetch = uvm_hal_blackwell_host_tlb_flush_prefetch,
             .access_counter_query_clear_op = uvm_hal_blackwell_access_counter_query_clear_op_gb100,
             .l2_invalidate = uvm_hal_blackwell_host_l2_invalidate,
+            .write_gpu_put = uvm_hal_blackwell_host_write_gpu_put,
+            .clear_faulted_channel_register = uvm_hal_blackwell_host_clear_faulted_channel_register,
         }
     },
     {
@@ -314,6 +316,13 @@ static uvm_hal_class_ops_t chip_table[] =
 {
     {
         .id = NV2080_CTRL_MC_ARCH_INFO_ARCHITECTURE_GB100 | NV2080_CTRL_MC_ARCH_INFO_IMPLEMENTATION_GB10B,
+        .parent_id = NV2080_CTRL_MC_ARCH_INFO_ARCHITECTURE_GB100,
+        .u.arch_ops = {
+            .mmu_mode_hal = uvm_hal_mmu_mode_blackwell_integrated,
+        }
+    },
+    {
+        .id = NV2080_CTRL_MC_ARCH_INFO_ARCHITECTURE_GB100 | NV2080_CTRL_MC_ARCH_INFO_IMPLEMENTATION_GB10C,
         .parent_id = NV2080_CTRL_MC_ARCH_INFO_ARCHITECTURE_GB100,
         .u.arch_ops = {
             .mmu_mode_hal = uvm_hal_mmu_mode_blackwell_integrated,
@@ -806,7 +815,7 @@ void uvm_hal_tlb_invalidate_phys(uvm_push_t *push, uvm_dma_map_invalidation_t in
 
 const char *uvm_aperture_string(uvm_aperture_t aperture)
 {
-    BUILD_BUG_ON(UVM_APERTURE_MAX != 13);
+    BUILD_BUG_ON(UVM_APERTURE_MAX != 22);
 
     switch (aperture) {
         UVM_ENUM_STRING_CASE(UVM_APERTURE_PEER_0);
@@ -818,6 +827,15 @@ const char *uvm_aperture_string(uvm_aperture_t aperture)
         UVM_ENUM_STRING_CASE(UVM_APERTURE_PEER_6);
         UVM_ENUM_STRING_CASE(UVM_APERTURE_PEER_7);
         UVM_ENUM_STRING_CASE(UVM_APERTURE_PEER_MAX);
+        UVM_ENUM_STRING_CASE(UVM_APERTURE_EGM_PEER_0);
+        UVM_ENUM_STRING_CASE(UVM_APERTURE_EGM_PEER_1);
+        UVM_ENUM_STRING_CASE(UVM_APERTURE_EGM_PEER_2);
+        UVM_ENUM_STRING_CASE(UVM_APERTURE_EGM_PEER_3);
+        UVM_ENUM_STRING_CASE(UVM_APERTURE_EGM_PEER_4);
+        UVM_ENUM_STRING_CASE(UVM_APERTURE_EGM_PEER_5);
+        UVM_ENUM_STRING_CASE(UVM_APERTURE_EGM_PEER_6);
+        UVM_ENUM_STRING_CASE(UVM_APERTURE_EGM_PEER_7);
+        UVM_ENUM_STRING_CASE(UVM_APERTURE_EGM_PEER_MAX);
         UVM_ENUM_STRING_CASE(UVM_APERTURE_SYS);
         UVM_ENUM_STRING_CASE(UVM_APERTURE_SYS_NON_COHERENT);
         UVM_ENUM_STRING_CASE(UVM_APERTURE_VID);

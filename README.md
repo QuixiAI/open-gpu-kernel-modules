@@ -3,7 +3,7 @@
 # open-gpu-kernel-modules — P2P for GeForce (3090 / 4090 / 5090)
 
 This is **QuixiAI / Eric Hartford's fork of NVIDIA's open GPU kernel
-modules** (driver 610.57.04) that enables **PCIe peer-to-peer (P2P) between
+modules** (driver 620.70.06) that enables **PCIe peer-to-peer (P2P) between
 consumer GeForce GPUs** — RTX 3090 (GA102), RTX 4090 (AD102), and RTX 5090
 (GB202). It is inspired by and derived from
 [George Hotz / tinygrad's P2P patch](https://github.com/tinygrad/open-gpu-kernel-modules)

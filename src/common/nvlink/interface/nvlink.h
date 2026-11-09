@@ -68,6 +68,7 @@ extern "C" {
 #define NVLINK_DEVICE_VERSION_31           0x00000006
 #define NVLINK_DEVICE_VERSION_40           0x00000007
 #define NVLINK_DEVICE_VERSION_50           0x00000008
+#define NVLINK_DEVICE_VERSION_60           0x00000009
 
 // Link Transition Timeouts in miliseconds
 #define NVLINK_TRANSITION_OFF_TIMEOUT        1
@@ -364,6 +365,7 @@ typedef struct nvlink_inband_data      nvlink_inband_data;
 #define NVLINK_LINKSTATE_ALI                            0x1C   // ALI 
 #define NVLINK_LINKSTATE_ACTIVE_PENDING                 0x1D   // Intermediate state for a link going to active
 #define NVLINK_LINKSTATE_TRAINING_CCI                   0x1E   // Intermediate state for a link that is still training
+#define NVLINK_LINKSTATE_PHYSICAL_UP_NO_TRAFFIC         0x1F   // Physical layer up, no traffic configured
 #define NVLINK_LINKSTATE_INVALID                        0xFF   // Invalid state
 
 // NVLINK TX SUBLINK states

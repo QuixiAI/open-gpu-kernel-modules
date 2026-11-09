@@ -26,6 +26,7 @@
 #include "kernel/gpu/fifo/kernel_ctxshare.h"
 #include "kernel/gpu/fifo/kernel_channel_group_api.h"
 #include "kernel/gpu/fifo/kernel_channel_group.h"
+
 #include "vgpu/rpc.h"
 #include "gpu/device/device.h"
 #include "kernel/gpu/mig_mgr/kernel_mig_manager.h"
@@ -54,15 +55,14 @@ kctxshareapiConstruct_IMPL
     KernelChannelGroup                 *pKernelChannelGroup;
     Device                             *pDevice      = NULL;
     RsResourceRef                      *pChanGrpRef;
-    RsClient                           *pClient;
+    RsClient                           *pClient      = pCallContext->pClient;
     NvHandle                            hDevice;
-    NvHandle                            hClient      = pParams->hClient;
     NvHandle                            hVASpace     = 0;
     NV_CTXSHARE_ALLOCATION_PARAMETERS  *pUserParams  = pParams->pAllocParams;
     RsShared                           *pShared      = NULL;
 
     // To make context share a child of a TSG, a TSG must exist.
-    if (CliGetChannelGroup(pParams->hClient, pParams->hParent,
+    if (CliGetChannelGroup(pClient, pParams->hParent,
             &pChanGrpRef, &hDevice) == NV_OK)
     {
         pKernelChannelGroupApi = dynamicCast(pChanGrpRef->pResource,
@@ -81,13 +81,6 @@ kctxshareapiConstruct_IMPL
     {
         rmStatus = kctxshareapiCopyConstruct_IMPL(pKernelCtxShareApi, pCallContext, pParams);
         return rmStatus;
-    }
-
-    rmStatus = serverGetClientUnderLock(&g_resServ, hClient, &pClient);
-    if (rmStatus != NV_OK)
-    {
-        NV_PRINTF(LEVEL_ERROR, "Invalid client handle!\n");
-        return NV_ERR_INVALID_ARGUMENT;
     }
 
     //
@@ -132,6 +125,15 @@ kctxshareapiConstruct_IMPL
     NV_ASSERT_OR_RETURN((rmStatus == NV_OK), rmStatus);
     NV_ASSERT_OR_RETURN((pVAS != NULL), NV_ERR_INVALID_STATE);
 
+    //
+    // Pick the HandleVAS that will be bound on this ctxshare. Mirrors how
+    // pVAS is selected above:
+    //   - legacy mode -> TSG's pHandleVAS (== group->pHandleVAS).
+    //   - client-allocated mode -> pHandleVasApi resolved from ctxshare
+    //     alloc params, or NULL if no HandleVAS was supplied.
+    //
+    HANDLE_VASPACE *pBoundHandleVAS = NULL;
+
     NV_ASSERT_OK_OR_GOTO(rmStatus,
                          serverAllocShareWithHalspecParent(&g_resServ, classInfo(KernelCtxShare), &pShared, staticCast(pGpu, Object)),
                          failed);
@@ -141,6 +143,7 @@ kctxshareapiConstruct_IMPL
                                              pKernelCtxShareApi,
                                              pGpu,
                                              pVAS,
+                                             pBoundHandleVAS,
                                              pUserParams->flags,
                                              &pUserParams->subctxId,
                                              pKernelChannelGroupApi),
@@ -151,7 +154,7 @@ kctxshareapiConstruct_IMPL
     if (hVASpace != NV01_NULL_OBJECT)
     {
         RsResourceRef *pVASpaceRef;
-        rmStatus = clientGetResourceRef(pCallContext->pClient, hVASpace, &pVASpaceRef);
+        rmStatus = clientGetResourceRef(pClient, hVASpace, &pVASpaceRef);
         if (rmStatus != NV_OK)
             goto failed;
 
@@ -161,7 +164,7 @@ kctxshareapiConstruct_IMPL
     if (pKernelChannelGroupApi->hKernelGraphicsContext != NV01_NULL_OBJECT)
     {
         RsResourceRef *pKernelGraphicsContextRef;
-        rmStatus = clientGetResourceRef(pCallContext->pClient, pKernelChannelGroupApi->hKernelGraphicsContext, &pKernelGraphicsContextRef);
+        rmStatus = clientGetResourceRef(pClient, pKernelChannelGroupApi->hKernelGraphicsContext, &pKernelGraphicsContextRef);
         if (rmStatus != NV_OK)
             goto failed;
 
@@ -363,6 +366,7 @@ kctxshareInitCommon_IMPL
     KernelCtxShareApi     *pKernelCtxShareApi,
     OBJGPU                *pGpu,
     OBJVASPACE            *pVAS,
+    HANDLE_VASPACE        *pHandleVAS,
     NvU32                  Flags,
     NvU32                 *pSubctxId,
     KernelChannelGroupApi *pKernelChannelGroupApi
@@ -529,6 +533,7 @@ kctxshareInitCommon_IMPL
     }
 
     pKernelCtxShare->pVAS                = pVAS;
+    pKernelCtxShare->pHandleVAS          = pHandleVAS;
     pKernelCtxShare->subctxId            = NvU64_LO32(subctxOffset);
     pKernelCtxShare->vaSpaceId           = NvU64_LO32(vaSpaceOffset);
     pKernelCtxShare->pKernelChannelGroup = pKernelChannelGroup;

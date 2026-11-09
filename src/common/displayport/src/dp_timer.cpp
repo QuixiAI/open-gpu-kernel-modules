@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2010-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2010-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -76,7 +76,7 @@ unsigned Timer::fire(bool fromSleep) // returns min time to next item to be fire
     return minleft;
 }
 
-void Timer::_pump(unsigned milliseconds, bool fromSleep) 
+void Timer::_pump(unsigned milliseconds, bool fromSleep)
 {
     do
     {
@@ -94,14 +94,13 @@ void Timer::_pump(unsigned milliseconds, bool fromSleep)
 //  Queue a timer callback.
 //      Unless the dont-execute-in-sleep flag is set
 //
-void Timer::queueCallback(Timer::TimerCallback * target, const  void * context, unsigned milliseconds, bool executeInSleep) 
+void Timer::queueCallback(Timer::TimerCallback * target, const  void * context, unsigned milliseconds, bool executeInSleep)
 {
     NvU64 now = getTimeUs();
     PendingCallback * callback = new PendingCallback();
     if (callback == NULL)
     {
-        DP_PRINTF(DP_ERROR, "DP> %s: Failed to allocate callback",
-                      __FUNCTION__);
+        DP_PRINTF(DP_ERROR, "DP> Failed to allocate callback");
         return;
     }
     callback->target = target;
@@ -112,7 +111,7 @@ void Timer::queueCallback(Timer::TimerCallback * target, const  void * context, 
     raw->queueCallback(this, milliseconds);
 }
 
-NvU64 Timer::getTimeUs() 
+NvU64 Timer::getTimeUs()
 {
     return raw->getTimeUs();
 }
@@ -124,7 +123,7 @@ void Timer::sleep(unsigned milliseconds)
     _pump(milliseconds, true);
 }
 
-void Timer::cancelCallbacks(Timer::TimerCallback * to) 
+void Timer::cancelCallbacks(Timer::TimerCallback * to)
 {
     if (!to)
         return;
@@ -133,17 +132,17 @@ void Timer::cancelCallbacks(Timer::TimerCallback * to)
             i->target = 0;
 }
 
-void Timer::cancelCallback(Timer::TimerCallback * to, const void * context) 
+void Timer::cancelCallback(Timer::TimerCallback * to, const void * context)
 {
     if (!to)
         return;
     for (PendingCallback * i = (PendingCallback *)pending.begin(); i!=pending.end(); i = (PendingCallback*)i->next)
-        if (i->target == to && i->context == context) 
+        if (i->target == to && i->context == context)
             i->target = 0;
 }
 
 // Queue callbacks in order.
-void Timer::queueCallbackInOrder(Timer::TimerCallback * target, const  void * context, unsigned milliseconds, bool executeInSleep) 
+void Timer::queueCallbackInOrder(Timer::TimerCallback * target, const  void * context, unsigned milliseconds, bool executeInSleep)
 {
     NvU64 now = getTimeUs();
     PendingCallback * callback = new PendingCallback();
@@ -169,7 +168,7 @@ void Timer::queueCallbackInOrder(Timer::TimerCallback * target, const  void * co
     {
         pending.insertBack(callback);
     }
-    else 
+    else
     {
         pending.insertBefore(i, callback);
     }
@@ -181,6 +180,13 @@ void Timer::cancelAllCallbacks()
 {
     for (PendingCallback * i = (PendingCallback*)pending.begin(); i!=pending.end(); i = (PendingCallback *)i->next)
         i->target = 0;
+}
+
+void Timer::cancelCallbacksWithContext(const  void * context)
+{
+    for (PendingCallback * i = (PendingCallback*)pending.begin(); i!=pending.end(); i = (PendingCallback *)i->next)
+        if(i->context == context)
+            i->target = 0;
 }
 
 void Timer::cancelCallbacksWithoutContext(const  void * context)

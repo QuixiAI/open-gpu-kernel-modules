@@ -191,6 +191,39 @@ NV_STATUS deserialize_NV2080_CTRL_MC_GET_INTR_CATEGORY_SUBTREE_MAP_PARAMS_v2B_0A
 }
 
 
+NV_STATUS deserialize_NV2080_CTRL_MC_GET_INTR_CATEGORY_SUBTREE_MAP_PARAMS_v30_05(
+    NV2080_CTRL_MC_GET_INTR_CATEGORY_SUBTREE_MAP_PARAMS *pOutput,
+    NvU8 *buffer, NvU32 bufferSize, NvU32 *offset)
+{
+    if (offset == NULL)
+    {
+        return NVOS_STATUS_ERROR_INVALID_ARGUMENT;
+    }
+
+    NV2080_CTRL_MC_GET_INTR_CATEGORY_SUBTREE_MAP_PARAMS_v30_05 *pInput = NULL;
+    if (pOutput && buffer)
+    {
+        if ((bufferSize < *offset) ||
+            (bufferSize < (*offset + sizeof(*pInput))))
+        {
+            return NV_ERR_BUFFER_TOO_SMALL;
+        }
+
+        pInput = (void*)(buffer + *offset);
+
+        NvU32 i;
+        for (i = 0; i < NV2080_INTR_CATEGORY_ENUM_COUNT_v30_05; i++)
+        {
+            pOutput->subtreeMap[i].subtreeMask = pInput->subtreeMap[i].subtreeMask;
+        }
+    }
+
+    *offset += sizeof(*pInput);
+
+    return NVOS_STATUS_SUCCESS;
+}
+
+
 NV_STATUS deserialize_NV2080_CTRL_MC_GET_STATIC_INTR_TABLE_PARAMS_v1E_09(NV2080_CTRL_MC_GET_STATIC_INTR_TABLE_PARAMS *mcStaticIntrTable, NvU8 *buffer, NvU32 bufferSize, NvU32 *offset)
 {
     if (!offset)
@@ -229,6 +262,50 @@ NV_STATUS deserialize_NV2080_CTRL_MC_GET_STATIC_INTR_TABLE_PARAMS_v1E_09(NV2080_
     return NVOS_STATUS_SUCCESS;
 }
 
+NV_STATUS deserialize_NV2080_CTRL_MC_GET_STATIC_INTR_TABLE_PARAMS_v30_03(NV2080_CTRL_MC_GET_STATIC_INTR_TABLE_PARAMS *mcStaticIntrTable, NvU8 *buffer, NvU32 bufferSize, NvU32 *offset)
+{
+    if (!offset)
+    {
+        return NVOS_STATUS_ERROR_INVALID_ARGUMENT;
+    }
+
+    // If mcStaticIntrTable and buffer are valid, then copy data and return the offset
+    if (mcStaticIntrTable && buffer)
+    {
+        NV2080_CTRL_MC_GET_STATIC_INTR_TABLE_PARAMS_v30_03 *mc_get_static_intr_table_v30_03 = NULL;
+        NvU32 i;
+
+        if ((bufferSize < *offset) ||
+            (bufferSize < (*offset + sizeof(NV2080_CTRL_MC_GET_STATIC_INTR_TABLE_PARAMS_v30_03))))
+        {
+            return NV_ERR_BUFFER_TOO_SMALL;
+        }
+
+        mc_get_static_intr_table_v30_03 = (void*)(buffer + *offset);
+
+        mcStaticIntrTable->numEntries = mc_get_static_intr_table_v30_03->numEntries;
+
+        if (mcStaticIntrTable->numEntries > NV2080_CTRL_MC_GET_STATIC_INTR_TABLE_MAX_v1E_09)
+        {
+            return NV_ERR_OUT_OF_RANGE;
+        }
+
+        for (i = 0; i < mcStaticIntrTable->numEntries; i++)
+        {
+            mcStaticIntrTable->entries[i].nv2080IntrType = mc_get_static_intr_table_v30_03->entries[i].nv2080IntrType;
+            mcStaticIntrTable->entries[i].pmcIntrMask = mc_get_static_intr_table_v30_03->entries[i].pmcIntrMask;
+            mcStaticIntrTable->entries[i].intrVectorStall = mc_get_static_intr_table_v30_03->entries[i].intrVectorStall;
+            mcStaticIntrTable->entries[i].intrVectorNonStall = mc_get_static_intr_table_v30_03->entries[i].intrVectorNonStall;
+        }
+
+        mcStaticIntrTable->disabledGinMessage = mc_get_static_intr_table_v30_03->disabledGinMessage;
+    }
+
+    *offset += sizeof(NV2080_CTRL_MC_GET_STATIC_INTR_TABLE_PARAMS_v30_03);
+
+    return NVOS_STATUS_SUCCESS;
+}
+
 NV_STATUS deserialize_VGPU_FIFO_GET_DEVICE_INFO_TABLE_v1A_07(VGPU_FIFO_GET_DEVICE_INFO_TABLE *fifoDeviceInfoTablePtr, NvU8 *buffer, NvU32 bufferSize, NvU32 *offset)
 {
     if (!offset)
@@ -262,7 +339,17 @@ NV_STATUS deserialize_VGPU_FIFO_GET_DEVICE_INFO_TABLE_v1A_07(VGPU_FIFO_GET_DEVIC
                  portMemCopy(&fifoDeviceInfoTable[i].entries[j].engineData,
                              sizeof(fifoDeviceInfoTable[i].entries[j].engineData),
                              &vgpu_fifo_get_device_info_table_v1A_07->fifoDeviceInfoTable[i].entries[j].engineData,
-                             sizeof(fifoDeviceInfoTable[i].entries[j].engineData));
+                             sizeof(vgpu_fifo_get_device_info_table_v1A_07->fifoDeviceInfoTable[i].entries[j].engineData));
+                 if (sizeof(fifoDeviceInfoTable[i].entries[j].engineData) >
+                     sizeof(vgpu_fifo_get_device_info_table_v1A_07->fifoDeviceInfoTable[i].entries[j].engineData))
+                 {
+                     portMemSet(
+                         (NvU8 *)&fifoDeviceInfoTable[i].entries[j].engineData +
+                             sizeof(vgpu_fifo_get_device_info_table_v1A_07->fifoDeviceInfoTable[i].entries[j].engineData),
+                         0,
+                         sizeof(fifoDeviceInfoTable[i].entries[j].engineData) -
+                             sizeof(vgpu_fifo_get_device_info_table_v1A_07->fifoDeviceInfoTable[i].entries[j].engineData));
+                 }
                  portMemCopy(&fifoDeviceInfoTable[i].entries[j].pbdmaIds,
                              sizeof(fifoDeviceInfoTable[i].entries[j].pbdmaIds),
                              &vgpu_fifo_get_device_info_table_v1A_07->fifoDeviceInfoTable[i].entries[j].pbdmaIds,
@@ -281,6 +368,138 @@ NV_STATUS deserialize_VGPU_FIFO_GET_DEVICE_INFO_TABLE_v1A_07(VGPU_FIFO_GET_DEVIC
     }
 
     *offset += sizeof(VGPU_FIFO_GET_DEVICE_INFO_TABLE_v1A_07);
+
+    return NVOS_STATUS_SUCCESS;
+}
+
+NV_STATUS deserialize_VGPU_FIFO_GET_DEVICE_INFO_TABLE_v2F_04(VGPU_FIFO_GET_DEVICE_INFO_TABLE *fifoDeviceInfoTablePtr, NvU8 *buffer, NvU32 bufferSize, NvU32 *offset)
+{
+    if (!offset)
+    {
+        return NVOS_STATUS_ERROR_INVALID_ARGUMENT;
+    }
+
+    // If fifoDeviceInfoTablePtr and buffer are valid, then copy data and return the offset
+    if (fifoDeviceInfoTablePtr && buffer)
+    {
+        NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_PARAMS *fifoDeviceInfoTable = *fifoDeviceInfoTablePtr;
+        VGPU_FIFO_GET_DEVICE_INFO_TABLE_v2F_04 *vgpu_fifo_get_device_info_table_v2F_04 = NULL;
+        NvU32 i, j;
+
+        if ((bufferSize < *offset) ||
+            (bufferSize < (*offset + sizeof(VGPU_FIFO_GET_DEVICE_INFO_TABLE_v2F_04))))
+        {
+            return NV_ERR_BUFFER_TOO_SMALL;
+        }
+
+        vgpu_fifo_get_device_info_table_v2F_04 = (void*)(buffer + *offset);
+
+        for (i = 0; i < MAX_ITERATIONS_DEVICE_INFO_TABLE; i++)
+        {
+            fifoDeviceInfoTable[i].baseIndex  = vgpu_fifo_get_device_info_table_v2F_04->fifoDeviceInfoTable[i].baseIndex;
+            fifoDeviceInfoTable[i].numEntries = vgpu_fifo_get_device_info_table_v2F_04->fifoDeviceInfoTable[i].numEntries;
+            fifoDeviceInfoTable[i].bMore      = vgpu_fifo_get_device_info_table_v2F_04->fifoDeviceInfoTable[i].bMore;
+
+             for (j = 0; j < NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_MAX_ENTRIES; j++)
+             {
+                 portMemCopy(&fifoDeviceInfoTable[i].entries[j].engineData,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].engineData),
+                             &vgpu_fifo_get_device_info_table_v2F_04->fifoDeviceInfoTable[i].entries[j].engineData,
+                             sizeof(vgpu_fifo_get_device_info_table_v2F_04->fifoDeviceInfoTable[i].entries[j].engineData));
+                 if (sizeof(fifoDeviceInfoTable[i].entries[j].engineData) >
+                     sizeof(vgpu_fifo_get_device_info_table_v2F_04->fifoDeviceInfoTable[i].entries[j].engineData))
+                 {
+                     portMemSet(
+                         (NvU8 *)&fifoDeviceInfoTable[i].entries[j].engineData +
+                             sizeof(vgpu_fifo_get_device_info_table_v2F_04->fifoDeviceInfoTable[i].entries[j].engineData),
+                         0,
+                         sizeof(fifoDeviceInfoTable[i].entries[j].engineData) -
+                             sizeof(vgpu_fifo_get_device_info_table_v2F_04->fifoDeviceInfoTable[i].entries[j].engineData));
+                 }
+                 portMemCopy(&fifoDeviceInfoTable[i].entries[j].pbdmaIds,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].pbdmaIds),
+                             &vgpu_fifo_get_device_info_table_v2F_04->fifoDeviceInfoTable[i].entries[j].pbdmaIds,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].pbdmaIds));
+                 portMemCopy(&fifoDeviceInfoTable[i].entries[j].pbdmaFaultIds,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].pbdmaFaultIds),
+                             &vgpu_fifo_get_device_info_table_v2F_04->fifoDeviceInfoTable[i].entries[j].pbdmaFaultIds,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].pbdmaFaultIds));
+                 portMemCopy(&fifoDeviceInfoTable[i].entries[j].engineName,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].engineName),
+                             &vgpu_fifo_get_device_info_table_v2F_04->fifoDeviceInfoTable[i].entries[j].engineName,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].engineName));
+                 fifoDeviceInfoTable[i].entries[j].numPbdmas = vgpu_fifo_get_device_info_table_v2F_04->fifoDeviceInfoTable[i].entries[j].numPbdmas;
+             }
+        }
+    }
+
+    *offset += sizeof(VGPU_FIFO_GET_DEVICE_INFO_TABLE_v2F_04);
+
+    return NVOS_STATUS_SUCCESS;
+}
+
+NV_STATUS deserialize_VGPU_FIFO_GET_DEVICE_INFO_TABLE_v30_01(VGPU_FIFO_GET_DEVICE_INFO_TABLE *fifoDeviceInfoTablePtr, NvU8 *buffer, NvU32 bufferSize, NvU32 *offset)
+{
+    if (!offset)
+    {
+        return NVOS_STATUS_ERROR_INVALID_ARGUMENT;
+    }
+
+    // If fifoDeviceInfoTablePtr and buffer are valid, then copy data and return the offset
+    if (fifoDeviceInfoTablePtr && buffer)
+    {
+        NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_PARAMS *fifoDeviceInfoTable = *fifoDeviceInfoTablePtr;
+        VGPU_FIFO_GET_DEVICE_INFO_TABLE_v30_01 *vgpu_fifo_get_device_info_table_v30_01 = NULL;
+        NvU32 i, j;
+
+        if ((bufferSize < *offset) ||
+            (bufferSize < (*offset + sizeof(VGPU_FIFO_GET_DEVICE_INFO_TABLE_v30_01))))
+        {
+            return NV_ERR_BUFFER_TOO_SMALL;
+        }
+
+        vgpu_fifo_get_device_info_table_v30_01 = (void*)(buffer + *offset);
+
+        for (i = 0; i < MAX_ITERATIONS_DEVICE_INFO_TABLE; i++)
+        {
+            fifoDeviceInfoTable[i].baseIndex  = vgpu_fifo_get_device_info_table_v30_01->fifoDeviceInfoTable[i].baseIndex;
+            fifoDeviceInfoTable[i].numEntries = vgpu_fifo_get_device_info_table_v30_01->fifoDeviceInfoTable[i].numEntries;
+            fifoDeviceInfoTable[i].bMore      = vgpu_fifo_get_device_info_table_v30_01->fifoDeviceInfoTable[i].bMore;
+
+             for (j = 0; j < NV2080_CTRL_FIFO_GET_DEVICE_INFO_TABLE_MAX_ENTRIES; j++)
+             {
+                 portMemCopy(&fifoDeviceInfoTable[i].entries[j].engineData,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].engineData),
+                             &vgpu_fifo_get_device_info_table_v30_01->fifoDeviceInfoTable[i].entries[j].engineData,
+                             sizeof(vgpu_fifo_get_device_info_table_v30_01->fifoDeviceInfoTable[i].entries[j].engineData));
+                 if (sizeof(fifoDeviceInfoTable[i].entries[j].engineData) >
+                     sizeof(vgpu_fifo_get_device_info_table_v30_01->fifoDeviceInfoTable[i].entries[j].engineData))
+                 {
+                     portMemSet(
+                         (NvU8 *)&fifoDeviceInfoTable[i].entries[j].engineData +
+                             sizeof(vgpu_fifo_get_device_info_table_v30_01->fifoDeviceInfoTable[i].entries[j].engineData),
+                         0,
+                         sizeof(fifoDeviceInfoTable[i].entries[j].engineData) -
+                             sizeof(vgpu_fifo_get_device_info_table_v30_01->fifoDeviceInfoTable[i].entries[j].engineData));
+                 }
+                 portMemCopy(&fifoDeviceInfoTable[i].entries[j].pbdmaIds,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].pbdmaIds),
+                             &vgpu_fifo_get_device_info_table_v30_01->fifoDeviceInfoTable[i].entries[j].pbdmaIds,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].pbdmaIds));
+                 portMemCopy(&fifoDeviceInfoTable[i].entries[j].pbdmaFaultIds,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].pbdmaFaultIds),
+                             &vgpu_fifo_get_device_info_table_v30_01->fifoDeviceInfoTable[i].entries[j].pbdmaFaultIds,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].pbdmaFaultIds));
+                 portMemCopy(&fifoDeviceInfoTable[i].entries[j].engineName,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].engineName),
+                             &vgpu_fifo_get_device_info_table_v30_01->fifoDeviceInfoTable[i].entries[j].engineName,
+                             sizeof(fifoDeviceInfoTable[i].entries[j].engineName));
+                 fifoDeviceInfoTable[i].entries[j].numPbdmas = vgpu_fifo_get_device_info_table_v30_01->fifoDeviceInfoTable[i].entries[j].numPbdmas;
+             }
+        }
+    }
+
+    *offset += sizeof(VGPU_FIFO_GET_DEVICE_INFO_TABLE_v30_01);
 
     return NVOS_STATUS_SUCCESS;
 }
@@ -804,6 +1023,53 @@ NV_STATUS deserialize_NV2080_CTRL_INTERNAL_STATIC_GR_GET_GLOBAL_SM_ORDER_PARAMS_
     }
 
     *offset += sizeof(NV2080_CTRL_INTERNAL_STATIC_GR_GET_GLOBAL_SM_ORDER_PARAMS_v2E_02);
+
+    return NVOS_STATUS_SUCCESS;
+}
+
+NV_STATUS deserialize_NV2080_CTRL_INTERNAL_STATIC_GR_GET_GLOBAL_SM_ORDER_PARAMS_v2F_00(NV2080_CTRL_INTERNAL_STATIC_GR_GET_GLOBAL_SM_ORDER_PARAMS *smOrderParams, NvU8 *buffer,
+                                                                                       NvU32 bufferSize, NvU32 *offset)
+{
+    if (!offset)
+    {
+        return NVOS_STATUS_ERROR_INVALID_ARGUMENT;
+    }
+
+    if (smOrderParams && buffer)
+    {
+        NV2080_CTRL_INTERNAL_STATIC_GR_GET_GLOBAL_SM_ORDER_PARAMS_v2F_00 *sm_order_v2F_00 = NULL;
+        NvU32 i = 0, j = 0;
+
+        if ((bufferSize < *offset) ||
+            (bufferSize < (*offset + sizeof(NV2080_CTRL_INTERNAL_STATIC_GR_GET_GLOBAL_SM_ORDER_PARAMS_v2F_00))))
+        {
+            return NV_ERR_BUFFER_TOO_SMALL;
+        }
+
+        sm_order_v2F_00 = (void*)(buffer + *offset);
+
+        for (i = 0; i < NV2080_CTRL_INTERNAL_GR_MAX_ENGINES_1B_04; i++)
+        {
+            for (j = 0; j < NV2080_CTRL_INTERNAL_GR_MAX_SM_v2E_02; j++)
+            {
+                smOrderParams->globalSmOrder[i].globalSmId[j].gpcId = sm_order_v2F_00->globalSmOrder[i].globalSmId[j].gpcId;
+                smOrderParams->globalSmOrder[i].globalSmId[j].localTpcId = sm_order_v2F_00->globalSmOrder[i].globalSmId[j].localTpcId;
+                smOrderParams->globalSmOrder[i].globalSmId[j].localSmId = sm_order_v2F_00->globalSmOrder[i].globalSmId[j].localSmId;
+                smOrderParams->globalSmOrder[i].globalSmId[j].globalTpcId = sm_order_v2F_00->globalSmOrder[i].globalSmId[j].globalTpcId;
+                smOrderParams->globalSmOrder[i].globalSmId[j].virtualGpcId = sm_order_v2F_00->globalSmOrder[i].globalSmId[j].virtualGpcId;
+                smOrderParams->globalSmOrder[i].globalSmId[j].virtualDpcId = sm_order_v2F_00->globalSmOrder[i].globalSmId[j].virtualDpcId;
+                smOrderParams->globalSmOrder[i].globalSmId[j].migratableTpcId = sm_order_v2F_00->globalSmOrder[i].globalSmId[j].migratableTpcId;
+                smOrderParams->globalSmOrder[i].globalSmId[j].physicalCpcId = sm_order_v2F_00->globalSmOrder[i].globalSmId[j].physicalCpcId;
+                smOrderParams->globalSmOrder[i].globalSmId[j].virtualTpcId = sm_order_v2F_00->globalSmOrder[i].globalSmId[j].virtualTpcId;
+                smOrderParams->globalSmOrder[i].globalSmId[j].ugpuId = sm_order_v2F_00->globalSmOrder[i].globalSmId[j].ugpuId;
+            }
+
+            smOrderParams->globalSmOrder[i].numSm = sm_order_v2F_00->globalSmOrder[i].numSm;
+            smOrderParams->globalSmOrder[i].numTpc = sm_order_v2F_00->globalSmOrder[i].numTpc;
+        }
+    }
+
+    *offset += sizeof(NV2080_CTRL_INTERNAL_STATIC_GR_GET_GLOBAL_SM_ORDER_PARAMS_v2F_00);
 
     return NVOS_STATUS_SUCCESS;
 }
@@ -1333,6 +1599,126 @@ NV_STATUS deserialize_NV2080_CTRL_INTERNAL_STATIC_GR_GET_FLOORSWEEPING_MASKS_PAR
     }
 
     *offset += sizeof(NV2080_CTRL_INTERNAL_STATIC_GR_GET_FLOORSWEEPING_MASKS_PARAMS_v2E_09);
+
+    return NVOS_STATUS_SUCCESS;
+
+}
+
+NV_STATUS deserialize_NV2080_CTRL_INTERNAL_STATIC_GR_GET_FLOORSWEEPING_MASKS_PARAMS_v2F_06(
+    NV2080_CTRL_INTERNAL_STATIC_GR_GET_FLOORSWEEPING_MASKS_PARAMS *floorsweepMaskParams,
+    NvU8 *buffer,
+    NvU32 bufferSize,
+    NvU32 *offset
+)
+{
+    if (offset == NULL)
+    {
+        return NVOS_STATUS_ERROR_INVALID_ARGUMENT;
+    }
+
+    if (floorsweepMaskParams && buffer)
+    {
+        NV2080_CTRL_INTERNAL_STATIC_GR_GET_FLOORSWEEPING_MASKS_PARAMS_v2F_06 *floorsweep_mask_params_v2F_06 = NULL;
+        NvU32 i = 0, j = 0;
+
+        if ((bufferSize < *offset) ||
+            (bufferSize < (*offset + sizeof(NV2080_CTRL_INTERNAL_STATIC_GR_GET_FLOORSWEEPING_MASKS_PARAMS_v2F_06))))
+        {
+            return NV_ERR_BUFFER_TOO_SMALL;
+        }
+
+        floorsweep_mask_params_v2F_06 = (void*)(buffer + *offset);
+
+        for (i = 0; i < NV2080_CTRL_INTERNAL_GR_MAX_ENGINES_1B_04; i++)
+        {
+            for (j = 0; j < NV2080_CTRL_INTERNAL_GR_MAX_GPC_v2E_09; j++)
+            {
+                floorsweepMaskParams->floorsweepingMasks[i].tpcMask[j] =
+                    floorsweep_mask_params_v2F_06->floorsweepingMasks[i].tpcMask[j];
+                floorsweepMaskParams->floorsweepingMasks[i].tpcCount[j] =
+                    floorsweep_mask_params_v2F_06->floorsweepingMasks[i].tpcCount[j];
+                floorsweepMaskParams->floorsweepingMasks[i].numPesPerGpc[j] =
+                    floorsweep_mask_params_v2F_06->floorsweepingMasks[i].numPesPerGpc[j];
+                floorsweepMaskParams->floorsweepingMasks[i].mmuPerGpc[j] =
+                    floorsweep_mask_params_v2F_06->floorsweepingMasks[i].mmuPerGpc[j];
+                floorsweepMaskParams->floorsweepingMasks[i].zcullMask[j] =
+                    floorsweep_mask_params_v2F_06->floorsweepingMasks[i].zcullMask[j];
+            }
+
+            floorsweepMaskParams->floorsweepingMasks[i].gpcMask =
+                floorsweep_mask_params_v2F_06->floorsweepingMasks[i].gpcMask;
+            floorsweepMaskParams->floorsweepingMasks[i].physGpcMask =
+                floorsweep_mask_params_v2F_06->floorsweepingMasks[i].physGpcMask;
+
+            for (j = 0; j < NV2080_CTRL_INTERNAL_MAX_TPC_PER_GPC_COUNT_v2F_06; j++)
+            {
+                floorsweepMaskParams->floorsweepingMasks[i].tpcToPesMap[j] =
+                    floorsweep_mask_params_v2F_06->floorsweepingMasks[i].tpcToPesMap[j];
+            }
+        }
+    }
+
+    *offset += sizeof(NV2080_CTRL_INTERNAL_STATIC_GR_GET_FLOORSWEEPING_MASKS_PARAMS_v2F_06);
+
+    return NVOS_STATUS_SUCCESS;
+
+}
+
+NV_STATUS deserialize_NV2080_CTRL_INTERNAL_STATIC_GR_GET_FLOORSWEEPING_MASKS_PARAMS_v30_00(
+    NV2080_CTRL_INTERNAL_STATIC_GR_GET_FLOORSWEEPING_MASKS_PARAMS *floorsweepMaskParams,
+    NvU8 *buffer,
+    NvU32 bufferSize,
+    NvU32 *offset
+)
+{
+    if (offset == NULL)
+    {
+        return NVOS_STATUS_ERROR_INVALID_ARGUMENT;
+    }
+
+    if (floorsweepMaskParams && buffer)
+    {
+        NV2080_CTRL_INTERNAL_STATIC_GR_GET_FLOORSWEEPING_MASKS_PARAMS_v30_00 *floorsweep_mask_params_v30_00 = NULL;
+        NvU32 i = 0, j = 0;
+
+        if ((bufferSize < *offset) ||
+            (bufferSize < (*offset + sizeof(NV2080_CTRL_INTERNAL_STATIC_GR_GET_FLOORSWEEPING_MASKS_PARAMS_v30_00))))
+        {
+            return NV_ERR_BUFFER_TOO_SMALL;
+        }
+
+        floorsweep_mask_params_v30_00 = (void*)(buffer + *offset);
+
+        for (i = 0; i < NV2080_CTRL_INTERNAL_GR_MAX_ENGINES_1B_04; i++)
+        {
+            for (j = 0; j < NV2080_CTRL_INTERNAL_GR_MAX_GPC_v2E_09; j++)
+            {
+                floorsweepMaskParams->floorsweepingMasks[i].tpcMask[j] =
+                    floorsweep_mask_params_v30_00->floorsweepingMasks[i].tpcMask[j];
+                floorsweepMaskParams->floorsweepingMasks[i].tpcCount[j] =
+                    floorsweep_mask_params_v30_00->floorsweepingMasks[i].tpcCount[j];
+                floorsweepMaskParams->floorsweepingMasks[i].numPesPerGpc[j] =
+                    floorsweep_mask_params_v30_00->floorsweepingMasks[i].numPesPerGpc[j];
+                floorsweepMaskParams->floorsweepingMasks[i].mmuPerGpc[j] =
+                    floorsweep_mask_params_v30_00->floorsweepingMasks[i].mmuPerGpc[j];
+                floorsweepMaskParams->floorsweepingMasks[i].zcullMask[j] =
+                    floorsweep_mask_params_v30_00->floorsweepingMasks[i].zcullMask[j];
+            }
+
+            floorsweepMaskParams->floorsweepingMasks[i].gpcMask =
+                floorsweep_mask_params_v30_00->floorsweepingMasks[i].gpcMask;
+            floorsweepMaskParams->floorsweepingMasks[i].physGpcMask =
+                floorsweep_mask_params_v30_00->floorsweepingMasks[i].physGpcMask;
+
+            for (j = 0; j < NV2080_CTRL_INTERNAL_MAX_TPC_PER_GPC_COUNT_v30_00; j++)
+            {
+                floorsweepMaskParams->floorsweepingMasks[i].tpcToPesMap[j] =
+                    floorsweep_mask_params_v30_00->floorsweepingMasks[i].tpcToPesMap[j];
+            }
+        }
+    }
+
+    *offset += sizeof(NV2080_CTRL_INTERNAL_STATIC_GR_GET_FLOORSWEEPING_MASKS_PARAMS_v30_00);
 
     return NVOS_STATUS_SUCCESS;
 
@@ -2329,7 +2715,8 @@ NV_STATUS deserialize_NV2080_CTRL_GPU_GET_COMPUTE_PROFILES_PARAMS_v20_04(NV2080_
 
         ciProfiles_v20_04 = (void*)(buffer + *offset);
 
-        NV_ASSERT(ciProfiles_v20_04->profileCount <= NV_ARRAY_ELEMENTS(ciProfiles->profiles));
+        NV_ASSERT_OR_RETURN(ciProfiles_v20_04->profileCount <= NV_ARRAY_ELEMENTS(ciProfiles->profiles),
+                            NV_ERR_INVALID_DATA);
 
         ciProfiles->profileCount = ciProfiles_v20_04->profileCount;
         for (i = 0; i < ciProfiles->profileCount; i++)
@@ -2369,7 +2756,8 @@ NV_STATUS deserialize_NV2080_CTRL_GPU_GET_COMPUTE_PROFILES_PARAMS_v2E_01(NV2080_
 
         ciProfiles_v2E_01 = (void*)(buffer + *offset);
 
-        NV_ASSERT(ciProfiles_v2E_01->profileCount <= NV_ARRAY_ELEMENTS(ciProfiles->profiles));
+        NV_ASSERT_OR_RETURN(ciProfiles_v2E_01->profileCount <= NV_ARRAY_ELEMENTS(ciProfiles->profiles),
+                            NV_ERR_INVALID_DATA);
 
         ciProfiles->profileCount = ciProfiles_v2E_01->profileCount;
         for (i = 0; i < ciProfiles->profileCount; i++)
@@ -2914,6 +3302,44 @@ NV_STATUS deserialize_NV2080_CTRL_GPU_QUERY_ECC_STATUS_PARAMS_v2C_02(NV2080_CTRL
         }
     }
     *offset += sizeof(NV2080_CTRL_GPU_QUERY_ECC_STATUS_PARAMS_v2C_02);
+
+    return NVOS_STATUS_SUCCESS;
+}
+
+NV_STATUS deserialize_NV2080_CTRL_GPU_QUERY_ECC_STATUS_PARAMS_v30_09(NV2080_CTRL_GPU_QUERY_ECC_STATUS_PARAMS *eccStatusParams, NvU8 *buffer, NvU32 bufferSize, NvU32 *offset)
+{
+    if (offset == NULL)
+    {
+        return NVOS_STATUS_ERROR_INVALID_ARGUMENT;
+    }
+
+    // If eccStatusParams and buffer are valid, then copy data and return the offset
+    if (eccStatusParams && buffer)
+    {
+        NvU32 i;
+        NV2080_CTRL_GPU_QUERY_ECC_STATUS_PARAMS_v30_09 *eccStatusParams_v30_09 = NULL;
+
+        if ((bufferSize < *offset) ||
+            (bufferSize < (*offset + sizeof(NV2080_CTRL_GPU_QUERY_ECC_STATUS_PARAMS_v30_09))))
+        {
+            return NV_ERR_BUFFER_TOO_SMALL;
+        }
+
+        eccStatusParams_v30_09 = (void*)(buffer + *offset);
+
+        eccStatusParams->bFatalPoisonError = eccStatusParams_v30_09->bFatalPoisonError;
+
+        for (i = 0; i < NV2080_CTRL_GPU_ECC_UNIT_COUNT_v30_09; i++) {
+            eccStatusParams->units[i].enabled                = eccStatusParams_v30_09->units[i].enabled;
+            eccStatusParams->units[i].scrubComplete          = eccStatusParams_v30_09->units[i].scrubComplete;
+            eccStatusParams->units[i].supported              = eccStatusParams_v30_09->units[i].supported;
+            eccStatusParams->units[i].dbe.count              = eccStatusParams_v30_09->units[i].dbe.count;
+            eccStatusParams->units[i].dbeNonResettable.count = eccStatusParams_v30_09->units[i].dbeNonResettable.count;
+            eccStatusParams->units[i].sbe.count              = eccStatusParams_v30_09->units[i].sbe.count;
+            eccStatusParams->units[i].sbeNonResettable.count = eccStatusParams_v30_09->units[i].sbeNonResettable.count;
+        }
+    }
+    *offset += sizeof(NV2080_CTRL_GPU_QUERY_ECC_STATUS_PARAMS_v30_09);
 
     return NVOS_STATUS_SUCCESS;
 }

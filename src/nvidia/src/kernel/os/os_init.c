@@ -40,8 +40,10 @@
 #include "core/locks.h"
 #include "gpu/gpu.h"
 #include "gpu/gpu_access.h"
+#include "gpu/gpu_working_config_regkey_table.h"
 #include "kernel/diagnostics/xid_context.h"
 #include "nv_ref.h"
+#include "nvport/nvport.h"
 #include "virtualization/hypervisor/hypervisor.h"
 
 
@@ -528,8 +530,6 @@ static void nvErrorLog2(void *pVoid, XidContext context, NvBool oobLogging, cons
 
     OBJGPU    *pGpu    = reinterpretCast(pVoid, OBJGPU *);
 
-#if RMCFG_MODULE_OOB || \
-    (RMCFG_MODULE_KERNEL_RC && !RMCFG_FEATURE_PLATFORM_GSP)
     char *errorString = portMemAllocNonPaged(MAX_ERROR_STRING);
     if (errorString == NULL)
         goto done;
@@ -544,7 +544,8 @@ static void nvErrorLog2(void *pVoid, XidContext context, NvBool oobLogging, cons
     if (msglen == 0)
         goto done;
 
-    if (pGpu != NULL && oobLogging)
+    if (pGpu != NULL && oobLogging &&
+        !IS_FMODEL(pGpu)) // Bug 5883591, FW not loaded on FSF
     {
         gpuLogOobXidMessage(pGpu, context.xid, errorString, msglen);
     }
@@ -561,8 +562,7 @@ static void nvErrorLog2(void *pVoid, XidContext context, NvBool oobLogging, cons
 
 done:
     portMemFree(errorString);
-#endif // RMCFG_MODULE_OOB || (RMCFG_MODULE_KERNEL_RC &&
-       // !RMCFG_FEATURE_PLATFORM_GSP)
+       // (RMCFG_MODULE_KERNEL_RC && !RMCFG_FEATURE_PLATFORM_GSP)
 
     osErrorLogV(pGpu, context, pFormat, arglist);
 }

@@ -234,6 +234,13 @@ struct ImexSessionApi;
 typedef struct ImexSessionApi ImexSessionApi;
 #endif /* __nvoc_class_id_ImexSessionApi */
 
+struct MnccSession;
+
+#ifndef __nvoc_class_id_MnccSession
+#define __nvoc_class_id_MnccSession 0x50aee7u
+typedef struct MnccSession MnccSession;
+#endif /* __nvoc_class_id_MnccSession */
+
 struct GpuManagementApi;
 
 #ifndef __nvoc_class_id_GpuManagementApi
@@ -247,6 +254,13 @@ struct EventBuffer;
 #define __nvoc_class_id_EventBuffer 0x63502bu
 typedef struct EventBuffer EventBuffer;
 #endif /* __nvoc_class_id_EventBuffer */
+
+struct OpEventBufferBind;
+
+#ifndef __nvoc_class_id_OpEventBufferBind
+#define __nvoc_class_id_OpEventBufferBind 0x0aaa53u
+typedef struct OpEventBufferBind OpEventBufferBind;
+#endif /* __nvoc_class_id_OpEventBufferBind */
 
 struct SemaphoreSurface;
 
@@ -324,6 +338,13 @@ struct TraceDeviceEvent;
 #define __nvoc_class_id_TraceDeviceEvent 0x64ce63u
 typedef struct TraceDeviceEvent TraceDeviceEvent;
 #endif /* __nvoc_class_id_TraceDeviceEvent */
+
+struct WppsConfigSession;
+
+#ifndef __nvoc_class_id_WppsConfigSession
+#define __nvoc_class_id_WppsConfigSession 0x853c55u
+typedef struct WppsConfigSession WppsConfigSession;
+#endif /* __nvoc_class_id_WppsConfigSession */
 
 struct PerfBuffer;
 
@@ -884,8 +905,10 @@ struct NVOCFwdDeclHack {
     struct MpsApi *PRIVATE_FIELD(MpsApi_MPS_COMPUTE);
     struct FmSessionApi *PRIVATE_FIELD(FmSessionApi_FABRIC_MANAGER_SESSION);
     struct ImexSessionApi *PRIVATE_FIELD(ImexSessionApi_NV_IMEX_SESSION);
+    struct MnccSession *PRIVATE_FIELD(MnccSession_NV_MNCC_SESSION);
     struct GpuManagementApi *PRIVATE_FIELD(GpuManagementApi_NV0020_GPU_MANAGEMENT);
     struct EventBuffer *PRIVATE_FIELD(EventBuffer_NV_EVENT_BUFFER);
+    struct OpEventBufferBind *PRIVATE_FIELD(OpEventBufferBind_NV_OPERATIONAL_EVENT_BUFFER_BIND);
     struct SemaphoreSurface *PRIVATE_FIELD(SemaphoreSurface_NV_SEMAPHORE_SURFACE);
     struct P2PApi *PRIVATE_FIELD(P2PApi_NV50_P2P);
     struct SyncGpuBoost *PRIVATE_FIELD(SyncGpuBoost_NV0060_SYNC_GPU_BOOST);
@@ -898,6 +921,7 @@ struct NVOCFwdDeclHack {
     struct ProfilerDeviceEvent *PRIVATE_FIELD(ProfilerDeviceEvent_PROFILER_DEVICE_EVENT);
     struct ProfilerContextEvent *PRIVATE_FIELD(ProfilerContextEvent_PROFILER_CONTEXT_EVENT);
     struct TraceDeviceEvent *PRIVATE_FIELD(TraceDeviceEvent_TRACE_DEVICE_EVENT);
+    struct WppsConfigSession *PRIVATE_FIELD(WppsConfigSession_WPPS_CONFIG_SESSION);
     struct PerfBuffer *PRIVATE_FIELD(PerfBuffer_G84_PERFBUFFER);
     struct VgpuApi *PRIVATE_FIELD(VgpuApi_KEPLER_DEVICE_VGPU);
     struct Hdacodec *PRIVATE_FIELD(Hdacodec_GF100_HDACODEC);

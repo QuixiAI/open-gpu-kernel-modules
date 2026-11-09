@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2021-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -75,6 +75,34 @@ _memoryfabricMemDescGetNumAddr
 
     // For discontiguous allocations, numAddr is total size / page size.
     return (memdescGetSize(pMemDesc) / pageSize);
+}
+
+static NV_STATUS
+_memoryfabricValidateHandleParams
+(
+    OBJGPU *pGpu,
+    NvU32   allocFlags
+)
+{
+    if (!pGpu->getProperty(pGpu, PDB_PROP_GPU_SUPPORTS_HANDLE_TRANSLATION_DEF))
+    {
+        NV_PRINTF(LEVEL_ERROR, "Handle allocations are not supported on pre-Blackwell\n");
+        return NV_ERR_NOT_SUPPORTED;
+    }
+
+    if (allocFlags & NV00F8_ALLOC_FLAGS_FORCE_NONCONTIGUOUS)
+    {
+        NV_PRINTF(LEVEL_ERROR, "Non-contiguous handle allocations are not supported\n");
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    if (!(allocFlags & NV00F8_ALLOC_FLAGS_FLEXIBLE_FLA))
+    {
+        NV_PRINTF(LEVEL_ERROR, "Non-flexible handle allocations are not supported\n");
+        return NV_ERR_INVALID_ARGUMENT;
+    }
+
+    return NV_OK;
 }
 
 static NV_STATUS
@@ -176,7 +204,7 @@ _memoryFabricDetachMem
         RsInterMapping *pInterMapping = pAttachMemInfoNode->pInterMapping;
 
         refRemoveInterMapping(pMemoryFabricRef, pInterMapping, NV_FALSE);
-        refDestroyInterMapping(pMemoryFabricRef, pInterMapping);
+        refDestroyInterMapping(&g_resServ, pMemoryFabricRef, pInterMapping);
     }
 
     btreeUnlink(&pAttachMemInfoNode->node, &pMemdescData->pAttachMemInfoTree);
@@ -218,7 +246,7 @@ _memoryFabricAttachMem
 
     NV_CHECK_OK_OR_RETURN(LEVEL_ERROR, status);
 
-    NV_ASSERT_OK_OR_RETURN(refCreateInterMapping(pMemoryFabricRef, &pInterMapping));
+    NV_ASSERT_OK_OR_RETURN(refCreateInterMapping(&g_resServ, pMemoryFabricRef, &pInterMapping));
 
     // No partial unmap supported
     pInterMapping->size = 0;
@@ -231,7 +259,7 @@ _memoryFabricAttachMem
     if (status != NV_OK)
     {
         NV_PRINTF(LEVEL_ERROR, "Failed to setup inter mapping\n");
-        refDestroyInterMapping(pMemoryFabricRef, pInterMapping);
+        refDestroyInterMapping(&g_resServ, pMemoryFabricRef, pInterMapping);
         return status;
     }
 
@@ -284,7 +312,7 @@ unmapVas:
 
 freeInterMapping:
     refRemoveInterMapping(pMemoryFabricRef, pInterMapping, NV_FALSE);
-    refDestroyInterMapping(pMemoryFabricRef, pInterMapping);
+    refDestroyInterMapping(&g_resServ, pMemoryFabricRef, pInterMapping);
 
     return status;
 }
@@ -486,6 +514,8 @@ _memoryfabricAllocFabricVa
     OBJGPU                       *pGpu,
     RS_RES_ALLOC_PARAMS_INTERNAL *pParams,
     NV00F8_ALLOCATION_PARAMETERS *pAllocParams,
+    NvU64                         fabricBaseOverride,
+    FABRIC_ALLOC_FLAGS            fabricFlags,
     VAS_ALLOC_FLAGS               flags,
     NvU64                       **ppAddr,
     NvU32                        *pNumAddr
@@ -497,16 +527,14 @@ _memoryfabricAllocFabricVa
                                                pAllocParams, ppAddr,
                                                pNumAddr);
     }
-    else
-    {
-        return fabricvaspaceAllocNonContiguous(pFabricVAS,
-                                               pAllocParams->allocSize,
-                                               pAllocParams->alignment,
-                                               fabricvaspaceGetUCFlaStart(pFabricVAS),
-                                               fabricvaspaceGetUCFlaLimit(pFabricVAS),
-                                               pAllocParams->pageSize, flags,
-                                               ppAddr, pNumAddr);
-    }
+
+    return fabricvaspaceAllocPtrResources(pFabricVAS, pGpu,
+                                          pAllocParams->allocSize,
+                                          pAllocParams->alignment,
+                                          pAllocParams->pageSize,
+                                          fabricBaseOverride,
+                                          fabricFlags, flags,
+                                          ppAddr, pNumAddr);
 }
 
 static void
@@ -570,6 +598,7 @@ memoryfabricConstruct_IMPL
     FABRIC_MEMDESC_DATA *pMemdescData = NULL;
     MEM_DESC_DESTROY_CALLBACK *pCallback = NULL;
     VAS_ALLOC_FLAGS flags = {0};
+    FABRIC_ALLOC_FLAGS fabricFlags = {0};
     NvU64   *pAddr = NULL;
     NvU32    numAddr = 0;
     NvU32    pteKind = 0;
@@ -577,7 +606,8 @@ memoryfabricConstruct_IMPL
     NvHandle hPhysMem;
     NvBool   bFlexible = NV_FALSE;
     NvU32    mapFlags = 0;
-    NV_ADDRESS_SPACE addrSpace;
+    NV_ADDRESS_SPACE addrSpace = ADDR_UNKNOWN;
+    NvU64 fabricBaseOverride = 0;
 
     if (RS_IS_COPY_CTOR(pParams))
     {
@@ -644,6 +674,15 @@ memoryfabricConstruct_IMPL
 #endif
     }
 
+    if ((pAllocParams->allocFlags & NV00F8_ALLOC_FLAGS_HANDLE_TRANSLATION))
+    {
+        status = _memoryfabricValidateHandleParams(pGpu, pAllocParams->allocFlags);
+        if (status != NV_OK)
+        {
+            return status;
+        }
+    }
+
     if (bFlexible && (hPhysMem != 0))
     {
         NV_PRINTF(LEVEL_ERROR,
@@ -673,25 +712,21 @@ memoryfabricConstruct_IMPL
     flags.bForceNonContig = !!(pAllocParams->allocFlags &
                                NV00F8_ALLOC_FLAGS_FORCE_NONCONTIGUOUS);
 
-    {
-        addrSpace = ADDR_FABRIC_V2;
+    // Translate NV00F8 alloc flags into the fabric-level FABRIC_ALLOC_FLAGS.
+    fabricFlags.bHandleTranslation = !!(pAllocParams->allocFlags &
+                                        NV00F8_ALLOC_FLAGS_HANDLE_TRANSLATION);
 
+    {
         status = _memoryfabricAllocFabricVa(pFabricVAS, pGpu,
                                             pParams, pAllocParams,
-                                            flags, &pAddr, &numAddr);
+                                            fabricBaseOverride, fabricFlags, flags,
+                                            &pAddr, &numAddr);
         if (status != NV_OK)
         {
-            NV_PRINTF(LEVEL_ERROR,
-                      "VA Space alloc failed! Status Code: 0x%x Size: 0x%llx "
-                      "RangeLo: 0x%llx, RangeHi: 0x%llx, page size: 0x%llx\n",
-                      status, pAllocParams->allocSize,
-                      fabricvaspaceGetUCFlaStart(pFabricVAS),
-                      fabricvaspaceGetUCFlaLimit(pFabricVAS),
-                      pAllocParams->pageSize);
-
             return status;
         }
 
+        addrSpace = ADDR_FABRIC_V2;
     }
 
     // Create a memdesc to associate with the above allocation.
@@ -1018,23 +1053,29 @@ memoryfabricCtrlCmdDescribe_IMPL
 
     if (gpuFabricProbeIsSupported(pGpu))
     {
-        status = gpuFabricProbeGetFabricCliqueId(pGpu->pGpuFabricProbeInfoKernel,
-                                                 &pParams->attrs.cliqueId);
+        NvU8 cliqueType = NV_FABRIC_CLIQUE_TYPE_UNICAST_POINTER;
+        NvU32 cliqueId;
+
+        if (pMemdescData->allocFlags & NV00F8_ALLOC_FLAGS_HANDLE_TRANSLATION)
+            cliqueType = NV_FABRIC_CLIQUE_TYPE_UNICAST_HANDLE;
+
+        status = gpuFabricProbeGetFabricCliqueIdByType(pGpu->pGpuFabricProbeInfoKernel,
+                                                       cliqueType, &cliqueId);
         if (status != NV_OK)
         {
             NV_PRINTF(LEVEL_ERROR, "unable to query cliqueId 0x%x\n", status);
             return status;
         }
 
+        pParams->attrs.clique = GPU_FABRIC_MAKE_CLIQUE(cliqueType, cliqueId);
         pParams->attrs.bwMode = knvlinkGetBWMode(pGpu, GPU_GET_KERNEL_NVLINK(pGpu));
         pParams->attrs.bwModeEpoch = knvlinkGetBWModeEpoch(pGpu, GPU_GET_KERNEL_NVLINK(pGpu));
-
     }
     else
     {
         pParams->attrs.bwMode = 0;
         pParams->attrs.bwModeEpoch = 0;
-        pParams->attrs.cliqueId = 0;
+        pParams->attrs.clique = 0;
     }
 
     pageSize = memdescGetPageSize(pMemory->pMemDesc, AT_GPU);

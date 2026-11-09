@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2010-2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2010-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -99,6 +99,8 @@ namespace DisplayPort
         NV_DP_SBMSG_PRIORITY_LEVEL_1,
     } DPSideBandMessagePriority;
 
+    class GenericUpReplyMessage;
+
     //
     //  CLASS: MessageManager
     //
@@ -115,6 +117,8 @@ namespace DisplayPort
         DownReplyManager    mergerDownReply;
         bool                isBeingDestroyed;
         bool                isPaused;
+        unsigned            sendDepth;
+        bool                bDrainingDeferred;
 
         List                messageReceivers;
         List                notYetSentDownRequest;    // Down Messages yet to be processed
@@ -133,6 +137,7 @@ namespace DisplayPort
         class Message;
         void cancelAllByType(unsigned type);
         void cancelAll(Message * message);
+        void clearSink(Message * message);
 
         void pause()
         {
@@ -145,11 +150,13 @@ namespace DisplayPort
         }
         void IRQUpReqest()
         {
+            if (isBeingDestroyed) return;
             mergerUpRequest.mailboxInterrupt();
         }
 
         void IRQDownReply()
         {
+            if (isBeingDestroyed) return;
             mergerDownReply.mailboxInterrupt();
         }
 
@@ -163,6 +170,7 @@ namespace DisplayPort
                 if (m->requestIdentifier ==
                     NV_DP_SBMSG_REQUEST_ID_QUERY_STREAM_ENCRYPTION_STATUS)
                 {
+                    purgeDeferredForMessage(m);
                     notYetSentDownRequest.remove(m);
                     m->parent = 0;
                 }
@@ -199,6 +207,7 @@ namespace DisplayPort
                 if (m->requestIdentifier ==
                     NV_DP_SBMSG_REQUEST_ID_QUERY_STREAM_ENCRYPTION_STATUS)
                 {
+                    purgeDeferredForMessage(m);
                     awaitingReplyDownRequest.remove(m);
                     m->parent = 0;
                     break;
@@ -211,7 +220,9 @@ namespace DisplayPort
             splitterUpReply(hal, timer),
             mergerUpRequest(hal, timer, Address(0), this),
             mergerDownReply(hal, timer, Address(0), this),
-            isBeingDestroyed(false), isPaused(false)
+            isBeingDestroyed(false), isPaused(false),
+            sendDepth(0), bDrainingDeferred(false),
+            nakUpReply(NULL)
         {
         }
 
@@ -326,6 +337,10 @@ namespace DisplayPort
                 if (parent) {
                     parent->timer->cancelCallbacks(this);
                     parent->splitterDownRequest.cancel(this);
+                    // Detach from up-reply splitter too; avoids UAF when
+                    // a Message is deleted mid-defer on the up-reply path.
+                    parent->splitterUpReply.cancel(this);
+                    parent->purgeDeferredForMessage(this);
                 }
 
                 parent = 0;
@@ -347,6 +362,32 @@ namespace DisplayPort
             }
         };
 
+    private:
+        struct DeferredCompletion : public ListElement
+        {
+            Message *                   message;
+            Message::MessageEventSink * sink;
+            bool                        failed;
+            NakData                     nakData;
+        };
+        List deferredCompletions;
+
+        void processDeferredCompletions();
+        void purgeDeferredForMessage(Message * m);
+
+        // Fire-and-forget sink for unknown-up-request NAK completion.
+        struct NakUpReplyEvtSink : Message::MessageEventSink
+        {
+            virtual void messageFailed(Message * from, NakData * nakData) {}
+            virtual void messageCompleted(Message * from) {}
+        };
+
+        GenericUpReplyMessage * nakUpReply;
+        NakUpReplyEvtSink       nakUpReplyEvtSink;
+
+        void sendNakForUnknownUpRequest(EncodedMessage * message);
+
+    public:
         //
         // Register new receiver for unpair messages
         // (eg. broadcast messages or sink->source messages)

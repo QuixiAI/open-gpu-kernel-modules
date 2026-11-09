@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2018-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2018-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: MIT
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -66,6 +66,7 @@
 typedef struct NV208F_CTRL_MMU_ECC_INJECT_ERROR_PARAMS {
     NvU32 location;
     NvU32 sublocation;
+    NvU32 extlocation;
     NvU8  unit;
     NvU8  errorType;
 } NV208F_CTRL_MMU_ECC_INJECT_ERROR_PARAMS;
@@ -124,6 +125,32 @@ typedef struct NV208F_CTRL_MMU_ECC_INJECTION_SUPPORTED_PARAMS {
 typedef struct NV208F_CTRL_MMU_GET_NUM_HSHUBMMUS_PARAMS {
     NvU32 numHshubmmus;
 } NV208F_CTRL_MMU_GET_NUM_HSHUBMMUS_PARAMS;
+
+/*
+* NV208F_CTRL_CMD_MMU_GET_NUM_HSHUBMMU_L1TLBS_FOR_SUBLOCATION
+*
+* Returns the number of ECC capable L1TLBs for the requested 
+* HSHUBMMU sublocation
+*
+* sublocation [in]
+*   HSHUBMMU sublocation.
+*
+* numL1Tlbs [out]
+*   Number of L1TLBs for the HSHUBMMU sublocation.
+*
+* Possible status values returned are:
+*   NV_OK
+*   NV_ERR_INVALID_ARGUMENT
+*   NV_ERR_NOT_SUPPORTED
+*/
+#define NV208F_CTRL_CMD_MMU_GET_NUM_HSHUBMMU_L1TLBS_FOR_SUBLOCATION (0x208f0b07) /* finn: Evaluated from "(FINN_NV20_SUBDEVICE_DIAG_MMU_INTERFACE_ID << 8) | NV208F_CTRL_MMU_GET_NUM_HSHUBMMU_L1TLBS_FOR_SUBLOCATION_PARAMS_MESSAGE_ID" */
+
+#define NV208F_CTRL_MMU_GET_NUM_HSHUBMMU_L1TLBS_FOR_SUBLOCATION_PARAMS_MESSAGE_ID (0x7U)
+
+typedef struct NV208F_CTRL_MMU_GET_NUM_HSHUBMMU_L1TLBS_FOR_SUBLOCATION_PARAMS {
+    NvU32 sublocation;
+    NvU32 numL1Tlbs;
+} NV208F_CTRL_MMU_GET_NUM_HSHUBMMU_L1TLBS_FOR_SUBLOCATION_PARAMS;
 
 /*
 * NV208F_CTRL_CMD_MMU_GET_NUM_HUBMMUS

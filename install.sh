@@ -13,7 +13,8 @@ MOK_PRIV=${MOK_PRIV:-/var/lib/shim-signed/mok/MOK.priv}
 MOK_DER=${MOK_DER:-/var/lib/shim-signed/mok/MOK.der}
 
 sb_enabled() { mokutil --sb-state 2>/dev/null | grep -q 'SecureBoot enabled'; }
-mok_enrolled() { mokutil --test-key "$MOK_DER" 2>/dev/null | grep -q 'is already enrolled'; }
+# mokutil exits non-zero when the key IS enrolled; under pipefail a plain pipeline would then read as "not enrolled"
+mok_enrolled() { local out; out=$(mokutil --test-key "$MOK_DER" 2>/dev/null || true); grep -q 'is already enrolled' <<<"$out"; }
 
 echo "== build =="
 make modules -j"$(nproc)"
